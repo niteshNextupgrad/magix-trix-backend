@@ -14,65 +14,61 @@ if (!deepgramApiKey) {
     process.exit(1);
 }
 
-// ✅ v3 initialization
 const deepgram = createClient(deepgramApiKey);
-
-// A simple way to manage sessions/rooms
 const sessions = {};
 
-wss.on('connection', async (ws) => {
+wss.on('connection', (ws) => {
     console.log('Client connected');
 
     let deepgramLive;
     let sessionId;
     let clientRole;
 
-    ws.on('message', async (message) => {
+    ws.on('message', async (message, isBinary) => {
         try {
-            const data = JSON.parse(message);
+            if (!isBinary) {
+                // handle JSON messages
+                const data = JSON.parse(message.toString());
 
-            if (data.type === 'join') {
-                sessionId = data.sessionId;
-                clientRole = data.role;
+                if (data.type === 'join') {
+                    sessionId = data.sessionId;
+                    clientRole = data.role;
 
-                if (!sessions[sessionId]) {
-                    sessions[sessionId] = {};
+                    if (!sessions[sessionId]) sessions[sessionId] = {};
+                    sessions[sessionId][clientRole] = ws;
+                    console.log(`Client joined session ${sessionId} as ${clientRole}`);
+
+                    if (clientRole === 'spectator') {
+                        deepgramLive = deepgram.listen.live({
+                            model: 'nova-2',
+                            language: 'en-US',
+                            punctuate: true,
+                            interim_results: true,
+                        });
+
+                        deepgramLive.on('open', () => console.log('✅ Deepgram connection opened'));
+                        deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
+                        deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
+
+                        // ✅ event is 'transcript'
+                        deepgramLive.on('transcript', (dgData) => {
+                            const transcript = dgData.channel.alternatives[0].transcript.trim();
+                            if (transcript && sessions[sessionId]?.magician) {
+                                sessions[sessionId].magician.send(
+                                    JSON.stringify({ type: 'transcript', word: transcript })
+                                );
+                            }
+                        });
+                    }
                 }
-                sessions[sessionId][clientRole] = ws;
-                console.log(`Client joined session ${sessionId} as ${clientRole}`);
-
-                if (clientRole === 'spectator') {
-                    // ✅ v3 live transcription
-                    deepgramLive = deepgram.listen.live({
-                        model: 'nova-2',
-                        language: 'en-US',
-                        punctuate: true,
-                        interimResults: true, // ✅ camelCase in v3
-                    });
-
-                    deepgramLive.on('open', () => console.log('✅ Deepgram connection opened'));
-                    deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
-                    deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
-
-                    // ✅ v3 event is "transcript"
-                    deepgramLive.on('transcriptReceived', (data) => {
-                        const transcript = data.channel.alternatives[0].transcript.trim();
-                        if (transcript && sessions[sessionId] && sessions[sessionId].magician) {
-                            sessions[sessionId].magician.send(
-                                JSON.stringify({
-                                    type: 'transcript',
-                                    word: transcript,
-                                })
-                            );
-                        }
-                    });
+            } else {
+                // handle binary audio chunks
+                if (clientRole === 'spectator' && deepgramLive) {
+                    deepgramLive.send(message);
                 }
             }
-        } catch (e) {
-            // If message is not JSON, it's likely audio data
-            if (clientRole === 'spectator' && deepgramLive && Buffer.isBuffer(message)) {
-                deepgramLive.send(message);
-            }
+        } catch (err) {
+            console.error("Message handling error:", err);
         }
     });
 
@@ -84,9 +80,7 @@ wss.on('connection', async (ws) => {
                 delete sessions[sessionId];
             }
         }
-        if (deepgramLive) {
-            deepgramLive.finish();
-        }
+        if (deepgramLive) deepgramLive.finish();
     });
 });
 
