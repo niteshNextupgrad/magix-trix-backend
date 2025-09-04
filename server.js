@@ -55,14 +55,15 @@ wss.on('connection', async (ws) => {
                     deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
 
                     // ✅ v3 event is "transcript"
-                    deepgramLive.on('transcript', (dgResponse) => {
-                        const transcript = dgResponse.channel.alternatives[0]?.transcript.trim();
+                    deepgramLive.on('transcriptReceived', (data) => {
+                        const transcript = data.channel.alternatives[0].transcript.trim();
                         if (transcript && sessions[sessionId] && sessions[sessionId].magician) {
-                            console.log(`Sending transcript: "${transcript}" to magician.`);
-                            sessions[sessionId].magician.send(JSON.stringify({
-                                type: 'transcript',
-                                word: transcript,
-                            }));
+                            sessions[sessionId].magician.send(
+                                JSON.stringify({
+                                    type: 'transcript',
+                                    word: transcript,
+                                })
+                            );
                         }
                     });
                 }
