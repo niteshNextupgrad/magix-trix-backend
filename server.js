@@ -42,6 +42,7 @@ wss.on('connection', (ws) => {
   let deepgramLive;
   let sessionId;
   let clientRole;
+  let audioChunksCount = 0;
 
   ws.on('message', async (message, isBinary) => {
     try {
@@ -126,6 +127,8 @@ wss.on('connection', (ws) => {
             // Handle transcript data
             deepgramLive.on('transcriptReceived', (dgData) => {
               try {
+                console.log("📋 Raw Deepgram data:", JSON.stringify(dgData, null, 2));
+                
                 const transcript = dgData.channel.alternatives[0].transcript.trim();
                 if (transcript) {
                   console.log("📝 Deepgram transcript received:", transcript);
@@ -135,7 +138,16 @@ wss.on('connection', (ws) => {
                       JSON.stringify({ type: 'transcript', word: transcript })
                     );
                     console.log(`📤 Sent transcript to magician: "${transcript}"`);
+                    
+                    // Also send confirmation to spectator
+                    if (sessions[sessionId]?.spectator) {
+                      sessions[sessionId].spectator.send(
+                        JSON.stringify({ type: 'transcript_sent', word: transcript })
+                      );
+                    }
                   }
+                } else {
+                  console.log("📝 Empty transcript received (might be background noise)");
                 }
               } catch (error) {
                 console.error('Error processing transcript:', error);
@@ -144,6 +156,11 @@ wss.on('connection', (ws) => {
             
             deepgramLive.on('metadata', (metadata) => {
               console.log('🔊 Deepgram metadata:', metadata);
+            });
+            
+            // Log when Deepgram starts processing
+            deepgramLive.on('processing', (processing) => {
+              console.log('🔊 Deepgram processing:', processing);
             });
           }
         }
@@ -155,9 +172,18 @@ wss.on('connection', (ws) => {
             sessions[sessionId].lastActivity = Date.now();
           }
           
+          audioChunksCount++;
+          console.log(`🎵 Audio chunk #${audioChunksCount} sent to Deepgram: ${message.byteLength} bytes`);
+          
           // Send audio to Deepgram
-          deepgramLive.send(message);
-          console.log('🎵 Audio chunk sent to Deepgram:', message.byteLength, 'bytes');
+          try {
+            const success = deepgramLive.send(message);
+            if (!success) {
+              console.error('❌ Failed to send audio to Deepgram');
+            }
+          } catch (error) {
+            console.error('❌ Error sending to Deepgram:', error);
+          }
         }
       }
     } catch (err) {
@@ -168,6 +194,7 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log(`🔴 Client disconnected from session ${sessionId} (role: ${clientRole})`);
+    console.log(`📊 Total audio chunks sent: ${audioChunksCount}`);
     if (sessionId && clientRole && sessions[sessionId]) {
       delete sessions[sessionId][clientRole];
       if (Object.keys(sessions[sessionId]).length === 1) { // Only lastActivity remains
