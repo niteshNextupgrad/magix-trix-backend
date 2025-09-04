@@ -18,7 +18,7 @@ const deepgram = createClient(deepgramApiKey);
 const sessions = {};
 
 wss.on('connection', (ws) => {
-    console.log('Client connected');
+    console.log('🟢 New WebSocket client connected');
 
     let deepgramLive;
     let sessionId;
@@ -27,8 +27,9 @@ wss.on('connection', (ws) => {
     ws.on('message', async (message, isBinary) => {
         try {
             if (!isBinary) {
-                // handle JSON messages
+                // 📦 JSON control message
                 const data = JSON.parse(message.toString());
+                console.log("📩 Control message:", data);
 
                 if (data.type === 'join') {
                     sessionId = data.sessionId;
@@ -36,7 +37,7 @@ wss.on('connection', (ws) => {
 
                     if (!sessions[sessionId]) sessions[sessionId] = {};
                     sessions[sessionId][clientRole] = ws;
-                    console.log(`Client joined session ${sessionId} as ${clientRole}`);
+                    console.log(`✅ Client joined session ${sessionId} as ${clientRole}`);
 
                     if (clientRole === 'spectator') {
                         deepgramLive = deepgram.listen.live({
@@ -46,13 +47,16 @@ wss.on('connection', (ws) => {
                             interim_results: true,
                         });
 
-                        deepgramLive.on('open', () => console.log('✅ Deepgram connection opened'));
+                        deepgramLive.on('open', () => console.log('🔗 Deepgram connection opened'));
                         deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
                         deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
 
-                        // ✅ event is 'transcript'
+                        // 🎤 Transcript events
                         deepgramLive.on('transcript', (dgData) => {
                             const transcript = dgData.channel.alternatives[0].transcript.trim();
+                            if (transcript) {
+                                console.log("📝 Deepgram transcript:", transcript); // <--- SERVER log
+                            }
                             if (transcript && sessions[sessionId]?.magician) {
                                 sessions[sessionId].magician.send(
                                     JSON.stringify({ type: 'transcript', word: transcript })
@@ -62,18 +66,19 @@ wss.on('connection', (ws) => {
                     }
                 }
             } else {
-                // handle binary audio chunks
+                // 🎧 Binary = audio chunks from spectator
+                console.log(`🎧 Received audio chunk (${message.length} bytes)`);
                 if (clientRole === 'spectator' && deepgramLive) {
                     deepgramLive.send(message);
                 }
             }
         } catch (err) {
-            console.error("Message handling error:", err);
+            console.error("⚠️ Message handling error:", err);
         }
     });
 
     ws.on('close', () => {
-        console.log('Client disconnected');
+        console.log('🔴 Client disconnected');
         if (sessionId && clientRole && sessions[sessionId]) {
             delete sessions[sessionId][clientRole];
             if (Object.keys(sessions[sessionId]).length === 0) {
@@ -86,5 +91,5 @@ wss.on('connection', (ws) => {
 
 const PORT = 3001;
 server.listen(PORT, () => {
-    console.log(`🔮 AI Magic Server is listening on port ${PORT}`);
+    console.log(`🚀 AI Magic Server is listening on port ${PORT}`);
 });
