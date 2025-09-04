@@ -52,10 +52,10 @@ wss.on('connection', (ws) => {
                         deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
 
                         // 🎤 Transcript events
-                        deepgramLive.on('transcript', (dgData) => {
+                        deepgramLive.on('transcriptReceived', (dgData) => {
                             const transcript = dgData.channel.alternatives[0].transcript.trim();
                             if (transcript) {
-                                console.log("📝 Deepgram transcript:", transcript); // <--- SERVER log
+                                console.log("📝 Deepgram transcript:", transcript); // server logs
                             }
                             if (transcript && sessions[sessionId]?.magician) {
                                 sessions[sessionId].magician.send(
@@ -63,6 +63,7 @@ wss.on('connection', (ws) => {
                                 );
                             }
                         });
+
                     }
                 }
             } else {
