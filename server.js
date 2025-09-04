@@ -39,10 +39,12 @@ setInterval(() => {
 wss.on('connection', (ws) => {
   console.log('🟢 New WebSocket client connected');
 
-  let deepgramLive;
+  let deepgramLive = null;
   let sessionId;
   let clientRole;
   let audioChunksCount = 0;
+  let isDeepgramReady = false;
+  let audioBuffer = [];
 
   ws.on('message', async (message, isBinary) => {
     try {
@@ -96,93 +98,42 @@ wss.on('connection', (ws) => {
           if (clientRole === 'spectator') {
             console.log(`🎧 Setting up Deepgram for spectator in session ${sessionId}`);
             
-            // 🔧 Tell Deepgram what encoding we're streaming
-            deepgramLive = deepgram.listen.live({
-              model: 'nova-2',
-              language: 'en-US',
-              punctuate: true,
-              interim_results: false,  // We only want final results
-              encoding: 'opus',
-              sample_rate: 48000,
-            });
-
-            deepgramLive.on('open', () => {
-              console.log('🔗 Deepgram connection opened');
-              ws.send(JSON.stringify({ type: 'deepgram_ready', message: 'Speech recognition ready' }));
-            });
-            
-            deepgramLive.on('close', () => {
-              console.log('❌ Deepgram connection closed');
-            });
-            
-            deepgramLive.on('error', (error) => {
-              console.error('❌ Deepgram Error:', error);
-              if (sessions[sessionId]?.spectator) {
-                sessions[sessionId].spectator.send(
-                  JSON.stringify({ type: 'error', message: 'Speech recognition service unavailable' })
-                );
-              }
-            });
-
-            // Handle transcript data
-            deepgramLive.on('transcriptReceived', (dgData) => {
-              try {
-                console.log("📋 Raw Deepgram data:", JSON.stringify(dgData, null, 2));
-                
-                const transcript = dgData.channel.alternatives[0].transcript.trim();
-                if (transcript) {
-                  console.log("📝 Deepgram transcript received:", transcript);
-                  
-                  if (sessions[sessionId]?.magician) {
-                    sessions[sessionId].magician.send(
-                      JSON.stringify({ type: 'transcript', word: transcript })
-                    );
-                    console.log(`📤 Sent transcript to magician: "${transcript}"`);
-                    
-                    // Also send confirmation to spectator
-                    if (sessions[sessionId]?.spectator) {
-                      sessions[sessionId].spectator.send(
-                        JSON.stringify({ type: 'transcript_sent', word: transcript })
-                      );
-                    }
-                  }
-                } else {
-                  console.log("📝 Empty transcript received (might be background noise)");
-                }
-              } catch (error) {
-                console.error('Error processing transcript:', error);
-              }
-            });
-            
-            deepgramLive.on('metadata', (metadata) => {
-              console.log('🔊 Deepgram metadata:', metadata);
-            });
-            
-            // Log when Deepgram starts processing
-            deepgramLive.on('processing', (processing) => {
-              console.log('🔊 Deepgram processing:', processing);
-            });
+            // Initialize Deepgram connection
+            setupDeepgram();
           }
         }
       } else {
         // 🎧 Binary = audio chunks from spectator
-        if (clientRole === 'spectator' && deepgramLive) {
+        if (clientRole === 'spectator') {
           // Update session activity timestamp
           if (sessions[sessionId]) {
             sessions[sessionId].lastActivity = Date.now();
           }
           
           audioChunksCount++;
-          console.log(`🎵 Audio chunk #${audioChunksCount} sent to Deepgram: ${message.byteLength} bytes`);
+          console.log(`🎵 Audio chunk #${audioChunksCount} received: ${message.byteLength} bytes`);
           
-          // Send audio to Deepgram
-          try {
-            const success = deepgramLive.send(message);
-            if (!success) {
-              console.error('❌ Failed to send audio to Deepgram');
+          // Send audio to Deepgram if ready, otherwise buffer it
+          if (isDeepgramReady && deepgramLive) {
+            try {
+              const success = deepgramLive.send(message);
+              if (!success) {
+                console.error('❌ Failed to send audio to Deepgram - connection may be closed');
+                // Try to reconnect Deepgram
+                setupDeepgram();
+                // Buffer this chunk for later sending
+                audioBuffer.push(message);
+              } else {
+                console.log(`✅ Audio chunk #${audioChunksCount} sent to Deepgram`);
+              }
+            } catch (error) {
+              console.error('❌ Error sending to Deepgram:', error);
+              // Buffer this chunk for later sending
+              audioBuffer.push(message);
             }
-          } catch (error) {
-            console.error('❌ Error sending to Deepgram:', error);
+          } else {
+            console.log(`📦 Buffering audio chunk #${audioChunksCount} (Deepgram not ready)`);
+            audioBuffer.push(message);
           }
         }
       }
@@ -192,9 +143,120 @@ wss.on('connection', (ws) => {
     }
   });
 
+  // Function to set up Deepgram connection
+  function setupDeepgram() {
+    // Close existing connection if any
+    if (deepgramLive) {
+      try {
+        deepgramLive.finish();
+      } catch (e) {
+        console.error('Error finishing previous Deepgram connection:', e);
+      }
+    }
+    
+    // Reset state
+    isDeepgramReady = false;
+    audioBuffer = [];
+    
+    console.log('🔄 Setting up new Deepgram connection...');
+    
+    // Create new Deepgram connection
+    deepgramLive = deepgram.listen.live({
+      model: 'nova-2',
+      language: 'en-US',
+      punctuate: true,
+      interim_results: false,
+      encoding: 'opus',
+      sample_rate: 48000,
+    });
+
+    deepgramLive.on('open', () => {
+      console.log('🔗 Deepgram connection opened');
+      isDeepgramReady = true;
+      
+      // Send buffered audio if any
+      if (audioBuffer.length > 0) {
+        console.log(`📤 Sending ${audioBuffer.length} buffered audio chunks to Deepgram`);
+        for (const chunk of audioBuffer) {
+          try {
+            const success = deepgramLive.send(chunk);
+            if (!success) {
+              console.error('❌ Failed to send buffered audio to Deepgram');
+              break;
+            }
+          } catch (error) {
+            console.error('❌ Error sending buffered audio to Deepgram:', error);
+            break;
+          }
+        }
+        audioBuffer = [];
+      }
+      
+      if (sessions[sessionId]?.spectator) {
+        sessions[sessionId].spectator.send(
+          JSON.stringify({ type: 'deepgram_ready', message: 'Speech recognition ready' })
+        );
+      }
+    });
+    
+    deepgramLive.on('close', () => {
+      console.log('❌ Deepgram connection closed');
+      isDeepgramReady = false;
+    });
+    
+    deepgramLive.on('error', (error) => {
+      console.error('❌ Deepgram Error:', error);
+      isDeepgramReady = false;
+      
+      if (sessions[sessionId]?.spectator) {
+        sessions[sessionId].spectator.send(
+          JSON.stringify({ type: 'error', message: 'Speech recognition service unavailable' })
+        );
+      }
+    });
+
+    // Handle transcript data
+    deepgramLive.on('transcriptReceived', (dgData) => {
+      try {
+        console.log("📋 Raw Deepgram data:", JSON.stringify(dgData));
+        
+        if (dgData.channel && dgData.channel.alternatives && dgData.channel.alternatives[0]) {
+          const transcript = dgData.channel.alternatives[0].transcript.trim();
+          if (transcript) {
+            console.log("📝 Deepgram transcript received:", transcript);
+            
+            if (sessions[sessionId]?.magician) {
+              sessions[sessionId].magician.send(
+                JSON.stringify({ type: 'transcript', word: transcript })
+              );
+              console.log(`📤 Sent transcript to magician: "${transcript}"`);
+              
+              // Also send confirmation to spectator
+              if (sessions[sessionId]?.spectator) {
+                sessions[sessionId].spectator.send(
+                  JSON.stringify({ type: 'transcript_sent', word: transcript })
+                );
+              }
+            }
+          } else {
+            console.log("📝 Empty transcript received (might be background noise)");
+          }
+        } else {
+          console.log("📝 No transcript in Deepgram response");
+        }
+      } catch (error) {
+        console.error('Error processing transcript:', error);
+      }
+    });
+    
+    deepgramLive.on('metadata', (metadata) => {
+      console.log('🔊 Deepgram metadata:', metadata);
+    });
+  }
+
   ws.on('close', () => {
     console.log(`🔴 Client disconnected from session ${sessionId} (role: ${clientRole})`);
-    console.log(`📊 Total audio chunks sent: ${audioChunksCount}`);
+    console.log(`📊 Total audio chunks received: ${audioChunksCount}`);
     if (sessionId && clientRole && sessions[sessionId]) {
       delete sessions[sessionId][clientRole];
       if (Object.keys(sessions[sessionId]).length === 1) { // Only lastActivity remains
@@ -202,8 +264,12 @@ wss.on('connection', (ws) => {
       }
     }
     if (deepgramLive) {
-      deepgramLive.finish();
-      console.log('🎤 Deepgram connection finished');
+      try {
+        deepgramLive.finish();
+        console.log('🎤 Deepgram connection finished');
+      } catch (e) {
+        console.error('Error finishing Deepgram connection:', e);
+      }
     }
   });
   
