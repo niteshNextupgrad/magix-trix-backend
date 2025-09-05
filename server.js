@@ -51,9 +51,12 @@ wss.on('connection', async (ws) => {
                     deepgramLive = deepgram.listen.live({
                         model: 'nova-2',
                         language: 'en-US',
+                        encoding: 'opus',
+                        sample_rate: 48000,
                         punctuate: true,
                         interimResults: true,
                     });
+
 
                     deepgramLive.on('open', () => console.log('✅ Deepgram connection opened'));
                     deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
@@ -94,7 +97,7 @@ wss.on('connection', async (ws) => {
             }
         }
         if (deepgramLive) {
-            deepgramLive.finish(); // ✅ correct close method
+            deepgramLive.finish();
         }
     });
 });
