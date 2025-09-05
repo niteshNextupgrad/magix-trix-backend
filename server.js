@@ -14,7 +14,7 @@ if (!deepgramApiKey) {
     process.exit(1);
 }
 
-// ✅ v3 initialization
+// v3 initialization
 const deepgram = createClient(deepgramApiKey);
 
 // A simple way to manage sessions/rooms
@@ -36,7 +36,7 @@ wss.on('connection', async (ws) => {
         }
 
         if (parsed) {
-            // ✅ Handle JSON messages
+            // Handle JSON messages
             if (parsed.type === 'join') {
                 sessionId = parsed.sessionId;
                 clientRole = parsed.role;
@@ -48,7 +48,7 @@ wss.on('connection', async (ws) => {
                 console.log(`Client joined session ${sessionId} as ${clientRole}`);
 
                 if (clientRole === 'spectator') {
-                    // ✅ v3 live transcription
+                    // v3 live transcription
                     deepgramLive = deepgram.listen.live({
                         model: 'nova-2',
                         language: 'en-US',
@@ -60,7 +60,7 @@ wss.on('connection', async (ws) => {
                     deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
                     deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
 
-                    // ✅ v3 event is "transcript"
+                    // v3 event is "transcript"
                     deepgramLive.on('transcript', (dgResponse) => {
                         const transcript = dgResponse.channel.alternatives[0].transcript.trim();
                         if (transcript && sessions[sessionId]?.magician) {
@@ -75,7 +75,7 @@ wss.on('connection', async (ws) => {
                 }
             }
         } else if (clientRole === 'spectator' && deepgramLive && Buffer.isBuffer(message)) {
-            // ✅ Forward audio buffer to Deepgram
+            // Forward audio buffer to Deepgram
             deepgramLive.send(message);
         }
     });
@@ -89,9 +89,10 @@ wss.on('connection', async (ws) => {
             }
         }
         if (deepgramLive) {
-            await deepgramLive.close();
+            deepgramLive.finish();
         }
     });
+
 });
 
 const PORT = 3001;
