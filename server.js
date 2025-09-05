@@ -1,108 +1,84 @@
-require('dotenv').config();
-const express = require('express');
-const http = require('http');
-const { WebSocketServer } = require('ws');
-const { createClient } = require('@deepgram/sdk');
+require("dotenv").config();
+const express = require("express");
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const WebSocket = require("ws");
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
-if (!deepgramApiKey) {
-    console.error("Deepgram API Key is missing. Please check your .env file.");
-    process.exit(1);
-}
-
-// ✅ v3 initialization
-const deepgram = createClient(deepgramApiKey);
-
-// Session store
 const sessions = {};
 
-wss.on('connection', async (ws) => {
-    console.log('Client connected');
+wss.on("connection", (ws) => {
+  console.log("Client connected");
 
-    let deepgramLive;
-    let sessionId;
-    let clientRole;
+  let sessionId;
+  let clientRole;
+  let assemblyWs;
 
-    ws.on('message', async (message) => {
-        let parsed;
-        try {
-            parsed = JSON.parse(message);
-        } catch {
-            parsed = null;
-        }
+  ws.on("message", async (message) => {
+    try {
+      const data = JSON.parse(message);
 
-        if (parsed) {
-            if (parsed.type === 'join') {
-                sessionId = parsed.sessionId;
-                clientRole = parsed.role;
+      // Handle join
+      if (data.type === "join") {
+        sessionId = data.sessionId;
+        clientRole = data.role;
 
-                if (!sessions[sessionId]) {
-                    sessions[sessionId] = {};
-                }
-                sessions[sessionId][clientRole] = ws;
-                console.log(`Client joined session ${sessionId} as ${clientRole}`);
+        if (!sessions[sessionId]) sessions[sessionId] = {};
+        sessions[sessionId][clientRole] = ws;
 
-                if (clientRole === 'spectator') {
-                    // ✅ create Deepgram live connection
-                    deepgramLive = deepgram.listen.live({
-                        model: 'nova-2',
-                        language: 'en-US',
-                        encoding: 'opus',
-                        sample_rate: 48000,
-                        punctuate: true,
-                        interimResults: true,
-                    });
+        console.log(`Client joined session ${sessionId} as ${clientRole}`);
 
-
-                    deepgramLive.on('open', () => console.log('✅ Deepgram connection opened'));
-                    deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
-                    deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
-
-                    // ✅ Listen only for final transcripts
-                    deepgramLive.on('transcript', (dgResponse) => {
-                        const transcript = dgResponse.channel.alternatives[0].transcript.trim();
-                        const isFinal = dgResponse.is_final;
-
-                        if (transcript && isFinal) {
-                            console.log(`[Spectator ${sessionId}]: ${transcript}`);
-
-                            if (sessions[sessionId]?.magician) {
-                                sessions[sessionId].magician.send(
-                                    JSON.stringify({
-                                        type: 'transcript',
-                                        word: transcript,
-                                    })
-                                );
-                            }
-                        }
-                    });
-                }
+        if (clientRole === "spectator") {
+          // Connect to AssemblyAI realtime
+          assemblyWs = new WebSocket(
+            "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=48000",
+            {
+              headers: { Authorization: process.env.ASSEMBLYAI_API_KEY },
             }
-        } else if (clientRole === 'spectator' && deepgramLive && Buffer.isBuffer(message)) {
-            // Forward audio buffer to Deepgram
-            deepgramLive.send(message);
-        }
-    });
+          );
 
-    ws.on('close', () => {
-        console.log('Client disconnected');
-        if (sessionId && clientRole && sessions[sessionId]) {
-            delete sessions[sessionId][clientRole];
-            if (Object.keys(sessions[sessionId]).length === 0) {
-                delete sessions[sessionId];
+          assemblyWs.on("open", () => console.log("✅ AssemblyAI connection opened"));
+          assemblyWs.on("close", () => console.log("❌ AssemblyAI connection closed"));
+          assemblyWs.on("error", (err) => console.error("AssemblyAI Error:", err));
+
+          // Receive transcript from AssemblyAI
+          assemblyWs.on("message", (msg) => {
+            const res = JSON.parse(msg.toString());
+            if (res.text && sessions[sessionId] && sessions[sessionId].magician) {
+              console.log("🎤 Transcript:", res.text);
+              sessions[sessionId].magician.send(
+                JSON.stringify({ type: "transcript", word: res.text })
+              );
             }
+          });
         }
-        if (deepgramLive) {
-            deepgramLive.finish();
-        }
-    });
+      }
+
+      // Handle audio chunks from spectator
+      if (data.type === "audio" && clientRole === "spectator" && assemblyWs?.readyState === WebSocket.OPEN) {
+        assemblyWs.send(JSON.stringify({ audio_data: data.data }));
+      }
+    } catch (err) {
+      console.error("Message parse error:", err);
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("Client disconnected");
+    if (sessionId && clientRole && sessions[sessionId]) {
+      delete sessions[sessionId][clientRole];
+      if (Object.keys(sessions[sessionId]).length === 0) {
+        delete sessions[sessionId];
+      }
+    }
+    if (assemblyWs) assemblyWs.close();
+  });
 });
 
 const PORT = 3001;
 server.listen(PORT, () => {
-    console.log(`🔮 AI Magic Server is listening on port ${PORT}`);
+  console.log(`🔮 Magic Server running on port ${PORT}`);
 });
