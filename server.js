@@ -111,7 +111,7 @@ function setupDeepgramConnection(sessionId, spectatorWs) {
 }
 
 wss.on('connection', (ws) => {
-    console.log('🟢 New WebSocket client connected');
+    console.log('New WebSocket client connected');
 
     let deepgramLive = null;
     let sessionId;
@@ -160,7 +160,7 @@ wss.on('connection', (ws) => {
                             sessions[sessionId].magician.send(
                                 JSON.stringify({
                                     type: 'transcript',
-                                    word: `TEST: ${data.message}`,
+                                    word: `${data.message}`,
                                     isTest: true,
                                     timestamp: data.timestamp || Date.now()
                                 })
