@@ -153,7 +153,7 @@ wss.on('connection', (ws) => {
                     }
                     // ADD THIS SECTION TO HANDLE TEST MESSAGES
                     else if (data.type === 'test') {
-                        console.log("🧪 Test message received from", clientRole, ":", data.message);
+                        console.log("🧪 Test message received from", clientRole, ":", data.word);
 
                         // Forward test messages to the magician in the same session
                         if (sessionId && sessions[sessionId]?.magician) {
