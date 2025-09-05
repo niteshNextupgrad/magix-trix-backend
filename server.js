@@ -117,6 +117,13 @@ wss.on('connection', (ws) => {
   let sessionId;
   let clientRole;
 
+  wss.on('connection', (ws) => {
+  console.log('🟢 New WebSocket client connected');
+
+  let deepgramLive = null;
+  let sessionId;
+  let clientRole;
+
   ws.on('message', async (message, isBinary) => {
     try {
       if (!isBinary) {
@@ -131,10 +138,42 @@ wss.on('connection', (ws) => {
           sessions[sessionId][clientRole] = ws;
           console.log(`✅ Client joined session ${sessionId} as ${clientRole}`);
 
+          // Send confirmation to client
+          ws.send(JSON.stringify({ 
+            type: 'joined', 
+            sessionId, 
+            role: clientRole,
+            message: `Successfully joined as ${clientRole}`
+          }));
+
           if (clientRole === 'spectator') {
             // Setup Deepgram for spectator
             deepgramLive = setupDeepgramConnection(sessionId, ws);
           }
+        } 
+        // ADD THIS SECTION TO HANDLE TEST MESSAGES
+        else if (data.type === 'test') {
+          console.log("🧪 Test message received from", clientRole, ":", data.message);
+          
+          // Forward test messages to the magician in the same session
+          if (sessionId && sessions[sessionId]?.magician) {
+            sessions[sessionId].magician.send(
+              JSON.stringify({ 
+                type: 'transcript', 
+                word: `TEST: ${data.message}`,
+                isTest: true,
+                timestamp: data.timestamp || Date.now()
+              })
+            );
+            console.log(`📤 Forwarded test message to magician: "${data.message}"`);
+          }
+          
+          // Also send confirmation back to the sender
+          ws.send(JSON.stringify({
+            type: 'test_result',
+            success: true,
+            message: `Test message "${data.message}" forwarded to magician`
+          }));
         }
       } else {
         // Audio chunks from spectator
@@ -153,6 +192,17 @@ wss.on('connection', (ws) => {
       }
     } catch (err) {
       console.error("⚠️ Message handling error:", err);
+      
+      // Send error response back to client
+      try {
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: 'Failed to process message',
+          error: err.message
+        }));
+      } catch (e) {
+        console.error('Could not send error response:', e);
+      }
     }
   });
 
@@ -175,19 +225,22 @@ wss.on('connection', (ws) => {
   });
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
-    activeSessions: Object.keys(sessions).length 
-  });
-});
-
-// Deepgram status endpoint
-app.get('/deepgram-status', (req, res) => {
-  res.status(200).json({ 
-    status: 'Deepgram connected', 
-    apiKey: deepgramApiKey ? 'Present' : 'Missing'
+  ws.on('close', () => {
+    console.log('🔴 Client disconnected');
+    if (sessionId && clientRole && sessions[sessionId]) {
+      delete sessions[sessionId][clientRole];
+      if (Object.keys(sessions[sessionId]).length === 0) {
+        delete sessions[sessionId];
+      }
+    }
+    if (deepgramLive) {
+      try {
+        deepgramLive.finish();
+        console.log('🎤 Deepgram connection finished');
+      } catch (e) {
+        console.error('Error finishing Deepgram connection:', e);
+      }
+    }
   });
 });
 
