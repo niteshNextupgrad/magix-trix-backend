@@ -14,10 +14,10 @@ if (!deepgramApiKey) {
     process.exit(1);
 }
 
-// v3 initialization
+// ✅ v3 initialization
 const deepgram = createClient(deepgramApiKey);
 
-// A simple way to manage sessions/rooms
+// Session store
 const sessions = {};
 
 wss.on('connection', async (ws) => {
@@ -36,7 +36,6 @@ wss.on('connection', async (ws) => {
         }
 
         if (parsed) {
-            // Handle JSON messages
             if (parsed.type === 'join') {
                 sessionId = parsed.sessionId;
                 clientRole = parsed.role;
@@ -48,7 +47,7 @@ wss.on('connection', async (ws) => {
                 console.log(`Client joined session ${sessionId} as ${clientRole}`);
 
                 if (clientRole === 'spectator') {
-                    // v3 live transcription
+                    // ✅ create Deepgram live connection
                     deepgramLive = deepgram.listen.live({
                         model: 'nova-2',
                         language: 'en-US',
@@ -60,14 +59,14 @@ wss.on('connection', async (ws) => {
                     deepgramLive.on('close', () => console.log('❌ Deepgram connection closed'));
                     deepgramLive.on('error', (error) => console.error('Deepgram Error:', error));
 
-                    // v3 event is "transcript"
+                    // ✅ Listen only for final transcripts
                     deepgramLive.on('transcript', (dgResponse) => {
                         const transcript = dgResponse.channel.alternatives[0].transcript.trim();
+                        const isFinal = dgResponse.is_final;
 
-                        if (transcript) {
-                            // Log spectator speech live on server console
+                        if (transcript && isFinal) {
                             console.log(`[Spectator ${sessionId}]: ${transcript}`);
-                            // Still forward to magician
+
                             if (sessions[sessionId]?.magician) {
                                 sessions[sessionId].magician.send(
                                     JSON.stringify({
@@ -78,7 +77,6 @@ wss.on('connection', async (ws) => {
                             }
                         }
                     });
-
                 }
             }
         } else if (clientRole === 'spectator' && deepgramLive && Buffer.isBuffer(message)) {
@@ -87,7 +85,7 @@ wss.on('connection', async (ws) => {
         }
     });
 
-    ws.on('close', async () => {
+    ws.on('close', () => {
         console.log('Client disconnected');
         if (sessionId && clientRole && sessions[sessionId]) {
             delete sessions[sessionId][clientRole];
@@ -96,10 +94,9 @@ wss.on('connection', async (ws) => {
             }
         }
         if (deepgramLive) {
-            deepgramLive.finish();
+            deepgramLive.finish(); // ✅ correct close method
         }
     });
-
 });
 
 const PORT = 3001;
