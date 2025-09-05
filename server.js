@@ -17,54 +17,23 @@ wss.on("connection", (ws) => {
   let clientRole;
   let assemblyWs;
 
-  ws.on("message", async (message) => {
-    try {
-      const data = JSON.parse(message);
+ ws.on('message', (message, isBinary) => {
+  if (isBinary) {
+    // Binary audio from AssemblyAI (usually for monitoring, can ignore)
+    return;
+  }
 
-      // Handle join
-      if (data.type === "join") {
-        sessionId = data.sessionId;
-        clientRole = data.role;
-
-        if (!sessions[sessionId]) sessions[sessionId] = {};
-        sessions[sessionId][clientRole] = ws;
-
-        console.log(`Client joined session ${sessionId} as ${clientRole}`);
-
-        if (clientRole === "spectator") {
-          // Connect to AssemblyAI realtime
-          assemblyWs = new WebSocket(
-            "wss://api.assemblyai.com/v2/realtime/ws?sample_rate=48000",
-            {
-              headers: { Authorization: process.env.ASSEMBLYAI_API_KEY },
-            }
-          );
-
-          assemblyWs.on("open", () => console.log("✅ AssemblyAI connection opened"));
-          assemblyWs.on("close", () => console.log("❌ AssemblyAI connection closed"));
-          assemblyWs.on("error", (err) => console.error("AssemblyAI Error:", err));
-
-          // Receive transcript from AssemblyAI
-          assemblyWs.on("message", (msg) => {
-            const res = JSON.parse(msg.toString());
-            if (res.text && sessions[sessionId] && sessions[sessionId].magician) {
-              console.log("🎤 Transcript:", res.text);
-              sessions[sessionId].magician.send(
-                JSON.stringify({ type: "transcript", word: res.text })
-              );
-            }
-          });
-        }
-      }
-
-      // Handle audio chunks from spectator
-      if (data.type === "audio" && clientRole === "spectator" && assemblyWs?.readyState === WebSocket.OPEN) {
-        assemblyWs.send(JSON.stringify({ audio_data: data.data }));
-      }
-    } catch (err) {
-      console.error("Message parse error:", err);
+  try {
+    const data = JSON.parse(message.toString());
+    if (data.type === 'transcript') {
+      console.log('Transcript:', data.text);
+      // Send to spectators
     }
-  });
+  } catch (err) {
+    console.warn('Non-JSON message received, ignoring:', err.message);
+  }
+});
+
 
   ws.on("close", () => {
     console.log("Client disconnected");
