@@ -63,14 +63,25 @@ wss.on('connection', async (ws) => {
                     // v3 event is "transcript"
                     deepgramLive.on('transcript', (dgResponse) => {
                         const transcript = dgResponse.channel.alternatives[0].transcript.trim();
-                        if (transcript && sessions[sessionId]?.magician) {
-                            sessions[sessionId].magician.send(
-                                JSON.stringify({
-                                    type: 'transcript',
-                                    word: transcript,
-                                })
-                            );
-                        }
+                        deepgramLive.on('transcript', (dgResponse) => {
+                            const transcript = dgResponse.channel.alternatives[0].transcript.trim();
+
+                            if (transcript) {
+                                // Log spectator speech live on server console
+                                console.log(`[Spectator ${sessionId}]: ${transcript}`);
+
+                                // Still forward to magician
+                                if (sessions[sessionId]?.magician) {
+                                    sessions[sessionId].magician.send(
+                                        JSON.stringify({
+                                            type: 'transcript',
+                                            word: transcript,
+                                        })
+                                    );
+                                }
+                            }
+                        });
+
                     });
                 }
             }
