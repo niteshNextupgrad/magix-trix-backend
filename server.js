@@ -24,17 +24,25 @@ const speechHistory = {};
 // Function to summarize text using Deepgram's API
 async function summarizeTextWithDeepgram(text) {
     try {
-        const { result, error } = await deepgram.analyze.summarize(
-            { text: text },
+        // const { result, error } = await deepgram.analyze.summarize(
+        //     { text: text },
+        //     {
+        //         model: "summarize",
+        //         parameters: {
+        //             summary_type: "informative", // Options: informative, conversational, catchphrase
+        //             length: "medium", // Options: short, medium, long
+        //         }
+        //     }
+        // );
+
+        const { result, error } = await deepgram.read.analyzeText(
+            { text },
             {
-                model: "summarize",
-                parameters: {
-                    summary_type: "informative", // Options: informative, conversational, catchphrase
-                    length: "medium", // Options: short, medium, long
-                }
+                language: 'en',
+                summarize: 'v2',
+                topics: true,
             }
         );
-
         if (error) {
             console.error('Deepgram summarization error:', error);
             return "Sorry, I couldn't summarize the text at this time.";
