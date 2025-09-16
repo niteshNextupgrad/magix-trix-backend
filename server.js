@@ -3,53 +3,91 @@ const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createClient } = require('@deepgram/sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai'); // 👈 Gemini
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const deepgramApiKey = process.env.DEEPGRAM_API_KEY;
+const geminiApiKey = process.env.GEMINI_API_KEY;
 
 if (!deepgramApiKey) {
     console.error("Deepgram API Key is missing. Please check your .env file.");
     process.exit(1);
 }
+if (!geminiApiKey) {
+    console.error("Gemini API Key is missing. Please check your .env file.");
+    process.exit(1);
+}
 
 const deepgram = createClient(deepgramApiKey);
+const genAI = new GoogleGenerativeAI(geminiApiKey); // Gemini client
 const sessions = {};
-
-// Store speech history for each session
 const speechHistory = {};
 
-// Function to summarize text using Deepgram's API
-async function summarizeTextWithDeepgram(text) {
-    // console.log(typeof text);
+// 🔹 Function to extract topics using Gemini
+async function extractTopicsWithGemini(text) {
+    try {
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    // console.log("text_to _get_topics:: ", text);
+        const prompt = `Extract 2-3 concise and general topics from the following text. 
+        The text may be a conversation or a single person's statement. 
+            Focus only on the main themes, ignore filler words. 
+            Return only a JSON array of strings, nothing else.
+            Example: ["Education", "Technology", "Creativity"]
+                
+            Text: ${text}`;
+
+
+        const result = await model.generateContent(prompt);
+        let responseText = result.response.text().trim();
+
+        // Remove markdown fences if present
+        responseText = responseText
+            .replace(/```json/i, "")
+            .replace(/```/g, "")
+            .trim();
+
+        let topics;
+        try {
+            topics = JSON.parse(responseText);
+        } catch {
+            topics = responseText
+                .replace(/[\[\]"]/g, "")
+                .split(",")
+                .map(t => t.trim())
+                .filter(Boolean);
+        }
+
+        return topics;
+    } catch (error) {
+        console.error("Error extracting topics with Gemini:", error);
+        return [];
+    }
+}
+
+
+// 🔹 Function to summarize text with Deepgram
+async function summarizeTextWithDeepgram(text) {
+    console.log("Summarizing with Deepgram + extracting topics with Gemini ::", text);
 
     try {
         const response = await deepgram.read.analyzeText(
             { text },
             {
                 language: 'en',
-                summarize: 'v2',
-                topics: true,
+                summarize: 'v2', //Only summarization here
             }
         );
 
         const { results } = response.result;
         console.log("Deepgram Results:", JSON.stringify(results, null, 2));
 
-        // Extract summary
         const summary = results.summary?.text || "No summary available.";
 
-        // Extract topics safely
-        let topics = [];
-        if (results.topics?.segments?.length > 0) {
-            topics = results.topics.segments.flatMap(seg =>
-                (seg.topics || []).map(t => t.topic)
-            );
-        }
+        // 👉 Call Gemini for topics
+        const topics = await extractTopicsWithGemini(text);
 
         return { summary, topics };
     } catch (error) {
@@ -58,95 +96,59 @@ async function summarizeTextWithDeepgram(text) {
     }
 }
 
-
-// Function to setup Deepgram connection for real-time transcription
+// 🔹 Function to setup Deepgram connection for real-time transcription
 function setupDeepgramConnection(sessionId, spectatorWs) {
-    // console.log(`🎧 Setting up Deepgram for session ${sessionId}`);
-
     let deepgramLive;
-    let isConnected = false;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 3;
 
-    const connect = () => {
-        try {
-            deepgramLive = deepgram.listen.live({
-                model: 'nova-2',
-                language: 'en-US',
-                punctuate: true,
-                interim_results: true,
-                encoding: 'opus',
-                sample_rate: 48000,
-            });
+    try {
+        deepgramLive = deepgram.listen.live({
+            model: 'nova-2',
+            language: 'en-US',
+            punctuate: true,
+            interim_results: true,
+            encoding: 'opus',
+            sample_rate: 48000,
+        });
 
-            deepgramLive.on('open', () => {
-                // console.log('🔗 Deepgram connection opened');
-                isConnected = true;
-                reconnectAttempts = 0;
-                spectatorWs.send(JSON.stringify({ type: 'deepgram_ready', message: 'Speech recognition ready' }));
-            });
+        deepgramLive.on('open', () => {
+            spectatorWs.send(JSON.stringify({ type: 'deepgram_ready', message: 'Speech recognition ready' }));
+        });
 
-            deepgramLive.on('close', () => {
-                // console.log('Deepgram connection closed');
-                isConnected = false;
+        deepgramLive.on('transcriptReceived', (dgData) => {
+            try {
+                if (dgData.is_final && dgData.channel?.alternatives?.[0]) {
+                    const transcript = dgData.channel.alternatives[0].transcript.trim();
+                    if (transcript) {
+                        if (!speechHistory[sessionId]) speechHistory[sessionId] = [];
+                        speechHistory[sessionId].push(transcript);
 
-                if (reconnectAttempts < maxReconnectAttempts) {
-                    reconnectAttempts++;
-                    // console.log(`🔄 Attempting reconnect ${reconnectAttempts}/${maxReconnectAttempts}`);
-                    setTimeout(connect, 2000);
-                }
-            });
+                        if (sessions[sessionId]?.magician) {
+                            sessions[sessionId].magician.send(
+                                JSON.stringify({ type: 'transcript', word: transcript })
+                            );
+                        }
 
-            deepgramLive.on('error', (error) => {
-                console.error('Deepgram Error:', error);
-                isConnected = false;
-                spectatorWs.send(JSON.stringify({ type: 'error', message: 'Speech recognition error' }));
-            });
-
-            deepgramLive.on('transcriptReceived', (dgData) => {
-                try {
-                    if (dgData.is_final && dgData.channel && dgData.channel.alternatives && dgData.channel.alternatives[0]) {
-                        const transcript = dgData.channel.alternatives[0].transcript.trim();
-                        if (transcript) {
-                            // console.log("✅ Final transcript received:", transcript);
-
-                            // Store the transcript in speech history
-                            if (!speechHistory[sessionId]) {
-                                speechHistory[sessionId] = [];
-                            }
-                            speechHistory[sessionId].push(transcript);
-
-                            if (sessions[sessionId]?.magician) {
-                                sessions[sessionId].magician.send(
-                                    JSON.stringify({ type: 'transcript', word: transcript })
-                                );
-                                // console.log(`📤 Sent transcript to magician: "${transcript}"`);
-                            }
-
-                            if (sessions[sessionId]?.spectator) {
-                                sessions[sessionId].spectator.send(
-                                    JSON.stringify({ type: 'transcript_sent', word: transcript })
-                                );
-                            }
+                        if (sessions[sessionId]?.spectator) {
+                            sessions[sessionId].spectator.send(
+                                JSON.stringify({ type: 'transcript_sent', word: transcript })
+                            );
                         }
                     }
-                } catch (error) {
-                    console.error('Error processing transcript:', error);
                 }
-            });
+            } catch (error) {
+                console.error('Error processing transcript:', error);
+            }
+        });
 
-            return deepgramLive;
-        } catch (error) {
-            console.error('❌ Failed to create Deepgram connection:', error);
-            spectatorWs.send(JSON.stringify({ type: 'error', message: 'Failed to initialize speech recognition' }));
-            return null;
-        }
-    };
-
-    return connect();
+        return deepgramLive;
+    } catch (error) {
+        console.error('❌ Failed to create Deepgram connection:', error);
+        spectatorWs.send(JSON.stringify({ type: 'error', message: 'Failed to initialize speech recognition' }));
+        return null;
+    }
 }
 
-// WebSocket connection handler
+// 🔹 WebSocket connection handler
 wss.on('connection', (ws) => {
     console.log('New WebSocket client connected');
 
@@ -211,6 +213,7 @@ wss.on('connection', (ws) => {
                                 JSON.stringify({
                                     type: 'summary',
                                     summary: "No speech content to summarize yet.",
+                                    topics: [],
                                     timestamp: Date.now()
                                 })
                             );
@@ -222,7 +225,6 @@ wss.on('connection', (ws) => {
                     console.log("Generated summary:", summary);
                     console.log("Generated topics:", topics);
 
-                    // Send both back to spectator
                     if (sessions[sessionId]?.spectator) {
                         sessions[sessionId].spectator.send(
                             JSON.stringify({
@@ -232,9 +234,7 @@ wss.on('connection', (ws) => {
                                 timestamp: Date.now()
                             })
                         );
-                        console.log(`Sent summary & topics to spectator`);
                     }
-
                 }
             } else {
                 if (clientRole === 'spectator' && deepgramLive) {
@@ -267,7 +267,6 @@ wss.on('connection', (ws) => {
             delete sessions[sessionId][clientRole];
             if (Object.keys(sessions[sessionId]).length === 0) {
                 delete sessions[sessionId];
-                // Clean up speech history when session ends
                 delete speechHistory[sessionId];
             }
         }
