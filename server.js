@@ -23,19 +23,12 @@ const speechHistory = {};
 
 // Function to summarize text using Deepgram's API
 async function summarizeTextWithDeepgram(text) {
-    try {
-        // const { result, error } = await deepgram.analyze.summarize(
-        //     { text: text },
-        //     {
-        //         model: "summarize",
-        //         parameters: {
-        //             summary_type: "informative", // Options: informative, conversational, catchphrase
-        //             length: "medium", // Options: short, medium, long
-        //         }
-        //     }
-        // );
+    // console.log(typeof text);
 
-        const { result, error } = await deepgram.read.analyzeText(
+    // console.log("text_to _get_topics:: ", text);
+
+    try {
+        const response = await deepgram.read.analyzeText(
             { text },
             {
                 language: 'en',
@@ -43,21 +36,32 @@ async function summarizeTextWithDeepgram(text) {
                 topics: true,
             }
         );
-        if (error) {
-            console.error('Deepgram summarization error:', error);
-            return "Sorry, I couldn't summarize the text at this time.";
+
+        const { results } = response.result;
+        console.log("Deepgram Results:", JSON.stringify(results, null, 2));
+
+        // Extract summary
+        const summary = results.summary?.text || "No summary available.";
+
+        // Extract topics safely
+        let topics = [];
+        if (results.topics?.segments?.length > 0) {
+            topics = results.topics.segments.flatMap(seg =>
+                (seg.topics || []).map(t => t.topic)
+            );
         }
 
-        return result.summary || "No summary available.";
+        return { summary, topics };
     } catch (error) {
         console.error('Error summarizing text with Deepgram:', error);
-        return "Sorry, I couldn't summarize the text at this time.";
+        return { summary: "Sorry, I couldn't summarize the text at this time.", topics: [] };
     }
 }
 
+
 // Function to setup Deepgram connection for real-time transcription
 function setupDeepgramConnection(sessionId, spectatorWs) {
-    console.log(`🎧 Setting up Deepgram for session ${sessionId}`);
+    // console.log(`🎧 Setting up Deepgram for session ${sessionId}`);
 
     let deepgramLive;
     let isConnected = false;
@@ -76,25 +80,25 @@ function setupDeepgramConnection(sessionId, spectatorWs) {
             });
 
             deepgramLive.on('open', () => {
-                console.log('🔗 Deepgram connection opened');
+                // console.log('🔗 Deepgram connection opened');
                 isConnected = true;
                 reconnectAttempts = 0;
                 spectatorWs.send(JSON.stringify({ type: 'deepgram_ready', message: 'Speech recognition ready' }));
             });
 
             deepgramLive.on('close', () => {
-                console.log('❌ Deepgram connection closed');
+                // console.log('Deepgram connection closed');
                 isConnected = false;
 
                 if (reconnectAttempts < maxReconnectAttempts) {
                     reconnectAttempts++;
-                    console.log(`🔄 Attempting reconnect ${reconnectAttempts}/${maxReconnectAttempts}`);
+                    // console.log(`🔄 Attempting reconnect ${reconnectAttempts}/${maxReconnectAttempts}`);
                     setTimeout(connect, 2000);
                 }
             });
 
             deepgramLive.on('error', (error) => {
-                console.error('❌ Deepgram Error:', error);
+                console.error('Deepgram Error:', error);
                 isConnected = false;
                 spectatorWs.send(JSON.stringify({ type: 'error', message: 'Speech recognition error' }));
             });
@@ -104,7 +108,7 @@ function setupDeepgramConnection(sessionId, spectatorWs) {
                     if (dgData.is_final && dgData.channel && dgData.channel.alternatives && dgData.channel.alternatives[0]) {
                         const transcript = dgData.channel.alternatives[0].transcript.trim();
                         if (transcript) {
-                            console.log("✅ Final transcript received:", transcript);
+                            // console.log("✅ Final transcript received:", transcript);
 
                             // Store the transcript in speech history
                             if (!speechHistory[sessionId]) {
@@ -116,7 +120,7 @@ function setupDeepgramConnection(sessionId, spectatorWs) {
                                 sessions[sessionId].magician.send(
                                     JSON.stringify({ type: 'transcript', word: transcript })
                                 );
-                                console.log(`📤 Sent transcript to magician: "${transcript}"`);
+                                // console.log(`📤 Sent transcript to magician: "${transcript}"`);
                             }
 
                             if (sessions[sessionId]?.spectator) {
@@ -162,7 +166,7 @@ wss.on('connection', (ws) => {
 
                     if (!sessions[sessionId]) sessions[sessionId] = {};
                     sessions[sessionId][clientRole] = ws;
-                    console.log(`✅ Client joined session ${sessionId} as ${clientRole}`);
+                    console.log(`Client joined session ${sessionId} as ${clientRole}`);
 
                     ws.send(JSON.stringify({
                         type: 'joined',
@@ -176,7 +180,7 @@ wss.on('connection', (ws) => {
                     }
                 }
                 else if (data.type === 'test') {
-                    console.log("🧪 Test message received from", clientRole, ":", data.message);
+                    console.log("Test message received from", clientRole, ":", data.message);
 
                     if (sessionId && sessions[sessionId]?.magician) {
                         sessions[sessionId].magician.send(
@@ -187,7 +191,7 @@ wss.on('connection', (ws) => {
                                 timestamp: data.timestamp || Date.now()
                             })
                         );
-                        console.log(`📤 Forwarded test message to magician: "${data.message}"`);
+                        console.log(`Forwarded test message to magician: "${data.message}"`);
                     }
 
                     ws.send(JSON.stringify({
@@ -197,7 +201,7 @@ wss.on('connection', (ws) => {
                     }));
                 }
                 else if (data.type === 'summarize') {
-                    console.log("📝 Summarization request received");
+                    console.log("Summarization request received");
 
                     const textToSummarize = data.text || '';
 
@@ -214,21 +218,23 @@ wss.on('connection', (ws) => {
                         return;
                     }
 
-                    // Summarize the text using Deepgram
-                    const summary = await summarizeTextWithDeepgram(textToSummarize);
+                    const { summary, topics } = await summarizeTextWithDeepgram(textToSummarize);
                     console.log("Generated summary:", summary);
+                    console.log("Generated topics:", topics);
 
-                    // Send the summary back to the spectator
+                    // Send both back to spectator
                     if (sessions[sessionId]?.spectator) {
                         sessions[sessionId].spectator.send(
                             JSON.stringify({
                                 type: 'summary',
-                                summary: summary,
+                                summary,
+                                topics,
                                 timestamp: Date.now()
                             })
                         );
-                        console.log(`📤 Sent summary to spectator`);
+                        console.log(`Sent summary & topics to spectator`);
                     }
+
                 }
             } else {
                 if (clientRole === 'spectator' && deepgramLive) {
