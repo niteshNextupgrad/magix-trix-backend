@@ -66,9 +66,9 @@ async function extractTopicsWithGemini(text) {
     }
 }
 
-// 🔹 Function to summarize text with Deepgram
+// Function to summarize text with Deepgram
 async function summarizeTextWithDeepgram(text) {
-    console.log("Summarizing with Deepgram + extracting topics with Gemini ::", text);
+    // console.log("Summarizing with Deepgram + extracting topics with Gemini ::", text);
 
     try {
         const response = await deepgram.read.analyzeText(
@@ -84,7 +84,7 @@ async function summarizeTextWithDeepgram(text) {
 
         const summary = results.summary?.text || "No summary available.";
 
-        // 👉 Call Gemini for topics
+        // Call Gemini for topics
         const topics = await extractTopicsWithGemini(text);
 
         return { summary, topics };
@@ -158,7 +158,7 @@ wss.on('connection', (ws) => {
                     if (!textToSummarize.trim()) {
                         // If no text provided, try to use accumulated speech history
                         const sessionSpeech = speechHistory[sessionId]?.join(' ') || '';
-                        
+
                         if (!sessionSpeech.trim()) {
                             if (sessions[sessionId]?.spectator) {
                                 sessions[sessionId].spectator.send(
@@ -211,7 +211,6 @@ wss.on('connection', (ws) => {
                     speechHistory[sessionId] = [];
                 }
             }
-            // Remove binary audio handling since magician uses browser speech recognition
         } catch (err) {
             console.error("Message handling error:", err);
             try {
@@ -231,7 +230,7 @@ wss.on('connection', (ws) => {
         if (sessionId && clientRole && sessions[sessionId]) {
             delete sessions[sessionId][clientRole];
             console.log(`Removed ${clientRole} from session ${sessionId}`);
-            
+
             // Clean up session if empty
             if (Object.keys(sessions[sessionId]).length === 0) {
                 delete sessions[sessionId];
