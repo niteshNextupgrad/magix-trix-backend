@@ -28,41 +28,54 @@ const speechHistory = {};
 
 // 🔹 Function to extract topics using Gemini
 async function extractTopicsWithGemini(text) {
-    try {
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const maxRetries = 3;
 
-        const prompt = `Extract 2-3 concise and general topics from the following text. 
-        The text may be a conversation or a single person's statement. 
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+            const prompt = `Extract 2-3 concise and general topics from the following text. 
+            The text may be a conversation or a single person's statement. 
             Focus only on the main themes, ignore filler words. 
             Return only a JSON array of strings, nothing else.
             Example: ["Education", "Technology", "Creativity"]
                 
             Text: ${text}`;
 
-        const result = await model.generateContent(prompt);
-        let responseText = result.response.text().trim();
+            const result = await model.generateContent(prompt);
+            let responseText = result.response.text().trim();
 
-        // Remove markdown fences if present
-        responseText = responseText
-            .replace(/```json/i, "")
-            .replace(/```/g, "")
-            .trim();
+            // Remove markdown fences if present
+            responseText = responseText
+                .replace(/```json/i, "")
+                .replace(/```/g, "")
+                .trim();
 
-        let topics;
-        try {
-            topics = JSON.parse(responseText);
-        } catch {
-            topics = responseText
-                .replace(/[\[\]"]/g, "")
-                .split(",")
-                .map(t => t.trim())
-                .filter(Boolean);
+            let topics;
+            try {
+                topics = JSON.parse(responseText);
+            } catch {
+                topics = responseText
+                    .replace(/[\[\]"]/g, "")
+                    .split(",")
+                    .map(t => t.trim())
+                    .filter(Boolean);
+            }
+
+            return topics;
+
+        } catch (error) {
+            console.error(`Gemini API attempt ${attempt} failed:`, error.message);
+
+            if (error.status === 503 && attempt < maxRetries) {
+                const delay = 2000 * attempt; // 2s, 4s, 6s delays
+                console.log(`Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            } else if (attempt === maxRetries) {
+                console.log("All Gemini attempts failed, returning empty array");
+                return [];
+            }
         }
-
-        return topics;
-    } catch (error) {
-        console.error("Error extracting topics with Gemini:", error);
-        return [];
     }
 }
 
