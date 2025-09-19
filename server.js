@@ -3,7 +3,7 @@ const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const { createClient } = require('@deepgram/sdk');
-const { GoogleGenerativeAI } = require('@google/generative-ai'); // 👈 Gemini
+const { GoogleGenerativeAI } = require('@google/generative-ai'); // Gemini
 
 const app = express();
 const server = http.createServer(app);
@@ -26,7 +26,7 @@ const genAI = new GoogleGenerativeAI(geminiApiKey); // Gemini client
 const sessions = {};
 const speechHistory = {};
 
-// 🔹 Function to extract topics using Gemini
+// Function to extract topics using Gemini
 async function extractTopicsWithGemini(text) {
     const maxRetries = 3;
 
@@ -135,6 +135,12 @@ wss.on('connection', (ws) => {
                         role: clientRole,
                         message: `Successfully joined as ${clientRole}`
                     }));
+
+                    if (sessions[sessionId].magician && sessions[sessionId].spectator) {
+                        sessions[sessionId].magician.send(JSON.stringify({ type: 'ready' }));
+                        sessions[sessionId].spectator.send(JSON.stringify({ type: 'ready' }));
+                        console.log(`Both magician and spectator are connected in ${sessionId}`);
+                    }
                 }
                 else if (data.type === 'test') {
                     // This now handles magician's speech being sent to spectator
