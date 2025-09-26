@@ -281,7 +281,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@deepgram/sdk');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 const cors = require('cors')
 
 const app = express();
@@ -290,7 +290,7 @@ const wss = new WebSocketServer({ server });
 
 const PORT = process.env.PORT || 3001;
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Sessions & speech history
 const sessions = {};
@@ -338,7 +338,7 @@ app.post('/api/upload-audio', upload.single('audio'), async (req, res) => {
             smart_format: true
         });
 
-        fs.unlinkSync(filePath); // clean temp file
+        // fs.unlinkSync(filePath); // clean temp file
 
         res.json({ message: 'Audio processed successfully', transcription: result });
     } catch (err) {
@@ -438,55 +438,54 @@ async function summarizeTextWithDeepgram(text) {
     }
 }
 
-async function extractTopicsWithGemini(text) {
-    const maxRetries = 3;
+async function extractTopicsWithGemini(text = "Default sample text") {
+    try {
+        const model = 'gemini-flash-latest';
+        const contents = [
+            {
+                role: 'user',
+                parts: [
+                    { text: `Extract 2-3 concise topics from this text and return a JSON array only: ${text}` }
+                ]
+            }
+        ];
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const response = await ai.models.generateContent({ model, contents });
+
+        const candidates = response?.candidates || [];
+        if (candidates.length === 0) return [];
+
+        // Flatten all text from all parts of all candidates
+        let allText = candidates
+            .flatMap(candidate => candidate?.content || [])
+            .flatMap(content => content?.parts || [])
+            .map(part => part.text)
+            .filter(Boolean)
+            .join(' ');
+
+        if (!allText) return [];
+
+        // Remove markdown ```json ``` and newlines
+        allText = allText.replace(/```json/i, "")
+            .replace(/```/g, "")
+            .replace(/\n/g, "")
+            .trim();
+
+        // Try parsing JSON
+        let topics;
         try {
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-            const prompt = `Extract 2-3 concise and general topics from the following text. 
-            The text may be a conversation or a single person's statement. 
-            Focus only on the main themes, ignore filler words. 
-            Return only a JSON array of strings, nothing else.
-            Example: ["Education", "Technology", "Creativity"]
-
-            Text: ${text}`;
-
-            const result = await model.generateContent(prompt);
-            let responseText = result.response.text().trim();
-
-            // Remove markdown fences if present
-            responseText = responseText
-                .replace(/```json/i, "")
-                .replace(/```/g, "")
-                .trim();
-
-            let topics;
-            try {
-                topics = JSON.parse(responseText);
-            } catch {
-                topics = responseText
-                    .replace(/[\[\]"]/g, "")
-                    .split(",")
-                    .map(t => t.trim())
-                    .filter(Boolean);
-            }
-
-            return topics;
-
-        } catch (error) {
-            console.error(`Gemini API attempt ${attempt} failed:`, error.message);
-
-            if (error.status === 503 && attempt < maxRetries) {
-                const delay = 2000 * attempt; // 2s, 4s, 6s delays
-                console.log(`Retrying in ${delay}ms...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            } else if (attempt === maxRetries) {
-                console.log("All Gemini attempts failed, returning empty array");
-                return [];
-            }
+            topics = JSON.parse(allText);
+        } catch {
+            // fallback: split by comma
+            topics = allText.split(',').map(t => t.trim()).filter(Boolean);
         }
+        console.log(topics);
+
+        return topics;
+
+    } catch (err) {
+        console.error("Gemini API error:", err);
+        return [];
     }
 }
 
@@ -510,6 +509,7 @@ async function processAudioWithDiarization(audioBuffer, sessionId) {
                 punctuate: true,
                 diarize: true,
                 smart_format: true,
+                timeout: 120000
                 // language: "en",   // optional
             }
         );
@@ -582,5 +582,3 @@ async function processAudioWithDiarization(audioBuffer, sessionId) {
 
 
 server.listen(PORT, () => console.log(`🚀 AI Magic Server running on port ${PORT}`));
-
-
