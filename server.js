@@ -6,7 +6,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('@deepgram/sdk');
-const { GoogleGenAI } = require('@google/genai');
+const { translate } = require('@vitalets/google-translate-api');
 const cors = require('cors');
 
 const app = express();
@@ -15,13 +15,6 @@ const wss = new WebSocketServer({ server });
 
 const PORT = process.env.PORT || 3001;
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-const geminiApiKey = process.env.GEMINI_API_KEY;
-
-if (!geminiApiKey) {
-    console.error("Gemini API Key is missing. Please check your .env file.");
-    process.exit(1);
-}
-const ai = new GoogleGenAI({ apiKey: geminiApiKey });
 
 // Sessions & speech history
 const sessions = {};
@@ -51,52 +44,6 @@ const upload = multer({
 
 app.use(express.json());
 app.use(cors());
-
-async function extractTopicWithGemini(text = "Magic Session", language = 'english') {
-    const model = 'gemini-flash-latest';
-    const contents = [
-        {
-            role: 'user',
-            parts: [
-                {
-                    text: `Analyze the following text and return only the main topic in the same language. Text: "${text}"`
-                }
-            ]
-        }
-    ];
-
-    let retries = 3;
-    while (retries > 0) {
-        try {
-            const response = await ai.models.generateContent({ model, contents });
-            const candidates = response?.candidates || [];
-            if (candidates.length === 0) throw new Error("No response");
-
-            let allText = candidates
-                .flatMap(c => c?.content || [])
-                .flatMap(c => c?.parts || [])
-                .map(p => p.text)
-                .filter(Boolean)
-                .join(' ')
-                .replace(/```/g, "")
-                .replace(/\n/g, "")
-                .trim();
-
-            return allText || "Magic Session";
-        } catch (err) {
-            if (err.message?.includes("UNAVAILABLE") || err.message?.includes("503")) {
-                console.warn(`Gemini overloaded — retrying in 2s (${retries - 1} left)...`);
-                retries--;
-                await new Promise(r => setTimeout(r, 2000));
-            } else {
-                console.error("Gemini API error:", err);
-                break;
-            }
-        }
-    }
-    return "Magic Session";
-}
-
 
 function combineWavBuffers(wavBuffers) {
     if (wavBuffers.length === 0) return Buffer.alloc(0);
@@ -156,12 +103,25 @@ async function summarizeTextWithDeepgram(text, language = 'en') {
         const summary = response.result.results?.summary?.text || "No summary available.";
         const topic = response.result.results?.topics?.segments?.[0]?.topics?.[0]?.topic || null;
 
-        console.log(` Summary: "${summary}"`);
-        console.log(` Topic: "${topic}"`);
+        console.log(`Deepgram Summary: "${summary}"`);
+        console.log(`Topic via Deepgram: "${topic}"`);
         return { summary, topic };
     } catch (err) {
-        console.error(' Summarization error:', err);
+        console.error('Summarization error:', err);
         return { summary: "Error summarizing.", topic: null };
+    }
+}
+
+async function translateText(text, targetLanguage) {
+    try {
+        if (!text || text.trim().length === 0) return text;
+
+        console.log(`Translating to ${targetLanguage}: "${text.substring(0, 100)}..."`);
+        const result = await translate(text, { to: targetLanguage });
+        return result.text;
+    } catch (error) {
+        console.error('Translation error:', error);
+        return text; // Return original text if translation fails
     }
 }
 
@@ -183,8 +143,8 @@ async function processDiarization(audioBuffer, sessionId, language) {
                 language: language
             }
         );
+        fs.unlinkSync(tempFilePath)
 
-        fs.unlinkSync(tempFilePath);
 
         if (error) {
             console.error("Diarization error:", error);
@@ -214,28 +174,47 @@ async function processDiarization(audioBuffer, sessionId, language) {
             const speaker = speakers[speakerId];
             console.log(`Speaker ${speakerId}: ${speaker.transcript.length} chars`);
             console.log(`Speaker${speakerId} Transcript : ${speaker.transcript}`);
-
         });
 
-        // process first pserson(magicain) voice only
+        // Process first person (magician) voice only
         const speaker0 = speakers[0];
         if (speaker0 && speaker0.transcript) {
-            let summary = speaker0.transcript; // default: full transcript
+            let summary = speaker0.transcript;
             let topic = null;
 
-            if (language === "en") {
-                // Use Deepgram for English
+            if (typeof language === 'string' && language.toLowerCase().startsWith('en')) {
+                // Use Deepgram directly for English
                 const dgResult = await summarizeTextWithDeepgram(speaker0.transcript, language);
                 summary = dgResult.summary;
-                topic = dgResult.topic;
+                topic = dgResult.topic || summary; // Use summary as fallback if topic is null
             } else {
-                // Use Gemini for non-English
-                topic = await extractTopicWithGemini(speaker0.transcript, language);
+                // For non-English: Translate → Deepgram → Translate back
+                try {
+                    // Translate transcript to English for Deepgram processing
+                    const translatedTranscript = await translateText(speaker0.transcript, 'en');
 
+                    // Get summary and topic from Deepgram (in English)
+                    const dgResult = await summarizeTextWithDeepgram(translatedTranscript, 'en');
+
+                    // Translate results back to original language
+                    summary = await translateText(dgResult.summary, language);
+                    topic = await translateText(dgResult.topic || dgResult.summary, language);
+
+                } catch (translationError) {
+                    console.error('Translation process failed, using fallback:', translationError);
+                    // Fallback: use original transcript with simple topic extraction
+                    summary = speaker0.transcript;
+                    topic = speaker0.transcript.split(' ').slice(0, 4).join(' ');
+                }
             }
 
-            console.log("topic to be send:", topic);
-            console.log("summary to be send:", summary);
+            // Final fallback: ensure topic is never null
+            if (!topic || topic === "null" || topic.trim().length === 0) {
+                topic = summary;
+            }
+
+            console.log("Final summary:", summary);
+            console.log("Final topic:", topic);
 
             // Send to spectator
             if (sessions[sessionId]?.spectator && sessions[sessionId].spectator.readyState === 1) {
@@ -258,8 +237,7 @@ async function processDiarization(audioBuffer, sessionId, language) {
                 }));
                 console.log('Summary sent to magician');
             }
-        }
-        else {
+        } else {
             console.log('No speaker 0 transcript found');
         }
 
@@ -331,9 +309,6 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             audioChunks[sessionId].chunks = [];
             audioChunks[sessionId].isRecording = true;
 
-            // audioChunks[sessionId].chunks.push(audioBuffer);
-            console.log(`Stored chunk 1 (${audioBuffer.length} bytes)`);
-
             if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
                     type: 'keyword_detected',
@@ -353,13 +328,6 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
         if (hasEndKeyword && isMagicActive === 'true') {
             console.log('END DETECTED - Processing stored audio');
-
-            // including endKeyword with the recording (storing chunks of endKeyword)
-
-            // if (audioChunks[sessionId].isRecording) {
-            //     audioChunks[sessionId].chunks.push(audioBuffer);
-            //     console.log(`Stored final chunk ${audioChunks[sessionId].chunks.length}`);
-            // }
 
             audioChunks[sessionId].isRecording = false;
 
@@ -411,7 +379,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
     }
 });
 
-//  WebSocket 
+// WebSocket 
 wss.on('connection', (ws) => {
     console.log('🔌 New WebSocket connection');
     let sessionId, clientRole;
@@ -472,7 +440,7 @@ wss.on('connection', (ws) => {
                 }
             }
             if (data.type === 'manual_end') {
-                const { sessionId, language = 'en' } = data // get the sessionId
+                const { sessionId, language = 'en' } = data;
                 console.log(`Manual stop received for session: ${sessionId}`);
 
                 if (audioChunks[sessionId] && audioChunks[sessionId].chunks.length > 0) {

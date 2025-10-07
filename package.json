@@ -14,6 +14,7 @@
     "@deepgram/sdk": "^4.11.2",
     "@google/genai": "^1.21.0",
     "@google/generative-ai": "^0.24.1",
+    "@vitalets/google-translate-api": "^9.2.1",
     "axios": "^1.12.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
