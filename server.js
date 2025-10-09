@@ -239,6 +239,16 @@ async function processDiarization(audioBuffer, sessionId, language) {
             }
         } else {
             console.log('No speaker 0 transcript found');
+
+            if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+                sessions[sessionId].magician.send(JSON.stringify({
+                    type: 'diarization_error',
+                    error: 'no_speaker_detected',
+                    message: 'No speech detected. Please try again.',
+                    timestamp: Date.now()
+                }));
+                console.log('Error notification sent to magician');
+            }
         }
 
     } catch (error) {
@@ -353,6 +363,15 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
                 audioChunks[sessionId].chunks = [];
             } else {
                 console.log('No chunks stored to process');
+                if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+                    sessions[sessionId].magician.send(JSON.stringify({
+                        type: 'no_recording_error',
+                        error: 'no_chunks_captured',
+                        message: 'No audio captured during magic. Recording was too short or silent.',
+                        timestamp: Date.now()
+                    }));
+                    console.log('No chunks error sent to magician');
+                }
             }
 
             return res.json({ success: true, transcript, keywordDetected: true, keyword: 'end' });
@@ -362,7 +381,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             if (sessions[sessionId]?.spectator && sessions[sessionId].spectator.readyState === 1) {
                 sessions[sessionId].spectator.send(JSON.stringify({
                     type: 'transcript',
-                    word: transcript,
+                    text: transcript,
                     timestamp: Date.now()
                 }));
             }
@@ -456,7 +475,19 @@ wss.on('connection', (ws) => {
                     // Clear chunks after processing
                     audioChunks[sessionId].chunks = [];
                 } else {
-                    console.log('No audio chunks found for this session');
+                    const wasRecording = audioChunks[sessionId]?.isRecording;
+                    const errorReason = wasRecording ? 'no_chunks_captured' : 'magic_not_started';
+
+                    console.log(`Manual stop but ${wasRecording ? 'no chunks captured' : 'magic never started'}`);
+
+                    if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+                        sessions[sessionId].magician.send(JSON.stringify({
+                            type: 'no_recording_error',
+                            error: errorReason,
+                            message: 'No audio captured during magic. Recording was too short or silent.',
+                            timestamp: Date.now()
+                        }));
+                    }
                 }
             }
 
