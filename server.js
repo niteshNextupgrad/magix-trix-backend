@@ -256,15 +256,23 @@ async function processDiarization(audioBuffer, sessionId, language) {
     }
 }
 
-// API Routes
+// Helper function to normalize text for keyword matching
+function normalizeText(text) {
+    return text
+        .toLowerCase()
+        .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, '') // remove punctuation
+        .replace(/\s{2,}/g, ' ') // normalize spaces
+        .trim();
+}
+
+
+
 app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) => {
     const { sessionId, startKeyword, endKeyword, isMagicActive, chunkNumber, language = 'en' } = req.body;
 
     console.log(`\n Chunk ${chunkNumber} | Session: ${sessionId} | Magic: ${isMagicActive} | Language: ${language}`);
 
-    if (!req.file) {
-        return res.status(400).json({ error: 'No audio file provided' });
-    }
+    if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
 
     const filePath = req.file.path;
 
@@ -288,15 +296,14 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
         }
 
         const transcript = result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
-        const transcriptLower = transcript.toLowerCase().trim();
-
         console.log(`Transcript: "${transcript}"`);
 
-        if (!transcript) {
-            return res.json({ success: true, transcript: '', keywordDetected: false });
+        if (!audioChunks[sessionId]) {
+            audioChunks[sessionId] = { chunks: [], isRecording: false };
         }
 
-        if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+        // Send live transcript to magician
+        if (sessions[sessionId]?.magician?.readyState === 1) {
             sessions[sessionId].magician.send(JSON.stringify({
                 type: 'transcript',
                 text: transcript,
@@ -304,22 +311,21 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             }));
         }
 
-        const hasStartKeyword = startKeyword && transcriptLower.includes(startKeyword.toLowerCase());
-        const hasEndKeyword = endKeyword && transcriptLower.includes(endKeyword.toLowerCase());
+        // Normalize transcript and keywords to handle punctuation
+        const normalizedTranscript = normalizeText(transcript);
+        const normalizedStartKeyword = startKeyword ? normalizeText(startKeyword) : '';
+        const normalizedEndKeyword = endKeyword ? normalizeText(endKeyword) : '';
 
-        if (!audioChunks[sessionId]) {
-            audioChunks[sessionId] = {
-                chunks: [],
-                isRecording: false
-            };
-        }
+        const hasStartKeyword = normalizedStartKeyword && normalizedTranscript.includes(normalizedStartKeyword);
+        const hasEndKeyword = normalizedEndKeyword && normalizedTranscript.includes(normalizedEndKeyword);
 
+        // Start recording
         if (hasStartKeyword && isMagicActive === 'false') {
             console.log('START DETECTED - Begin storing chunks');
             audioChunks[sessionId].chunks = [];
             audioChunks[sessionId].isRecording = true;
 
-            if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+            if (sessions[sessionId]?.magician?.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
                     type: 'keyword_detected',
                     keyword: 'start',
@@ -331,17 +337,20 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             return res.json({ success: true, transcript, keywordDetected: true, keyword: 'start' });
         }
 
+        // Store chunk if recording
         if (audioChunks[sessionId].isRecording && !hasEndKeyword) {
             audioChunks[sessionId].chunks.push(audioBuffer);
             console.log(` Stored chunk ${audioChunks[sessionId].chunks.length} (${audioBuffer.length} bytes)`);
         }
 
+        // End keyword detected
         if (hasEndKeyword && isMagicActive === 'true') {
             console.log('END DETECTED - Processing stored audio');
 
             audioChunks[sessionId].isRecording = false;
 
-            if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+            // Notify magician to stop mic
+            if (sessions[sessionId]?.magician?.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
                     type: 'keyword_detected',
                     keyword: 'end',
@@ -352,7 +361,6 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
             if (audioChunks[sessionId].chunks.length > 0) {
                 console.log(`Processing ${audioChunks[sessionId].chunks.length} stored chunks`);
-
                 const combinedAudio = combineWavBuffers(audioChunks[sessionId].chunks);
                 console.log(`Combined audio size: ${combinedAudio.length} bytes`);
 
@@ -363,7 +371,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
                 audioChunks[sessionId].chunks = [];
             } else {
                 console.log('No chunks stored to process');
-                if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+                if (sessions[sessionId]?.magician?.readyState === 1) {
                     sessions[sessionId].magician.send(JSON.stringify({
                         type: 'no_recording_error',
                         error: 'no_chunks_captured',
@@ -377,8 +385,9 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             return res.json({ success: true, transcript, keywordDetected: true, keyword: 'end' });
         }
 
+        // Send transcript to spectator if magic active
         if (isMagicActive === 'true' && transcript) {
-            if (sessions[sessionId]?.spectator && sessions[sessionId].spectator.readyState === 1) {
+            if (sessions[sessionId]?.spectator?.readyState === 1) {
                 sessions[sessionId].spectator.send(JSON.stringify({
                     type: 'transcript',
                     text: transcript,
@@ -391,12 +400,11 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
     } catch (err) {
         console.error('Error:', err);
-        try {
-            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch (e) { }
+        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) { }
         res.status(500).json({ error: 'Processing failed', message: err.message });
     }
 });
+
 
 // WebSocket 
 wss.on('connection', (ws) => {
