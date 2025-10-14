@@ -256,7 +256,7 @@ async function processDiarization(audioBuffer, sessionId, language) {
     }
 }
 
-// Helper function to normalize text for keyword matching
+//  to normalize text for keyword matching
 function normalizeText(text) {
     return text
         .toLowerCase()
@@ -264,7 +264,6 @@ function normalizeText(text) {
         .replace(/\s{2,}/g, ' ') // normalize spaces
         .trim();
 }
-
 
 
 app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) => {
@@ -282,7 +281,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
         const { result, error } = await deepgram.listen.prerecorded.transcribeFile(audioBuffer, {
             model: 'nova-3',
-            punctuate: true,
+            // punctuate: true,
             smart_format: true,
             endpointing: 500,
             language: language
