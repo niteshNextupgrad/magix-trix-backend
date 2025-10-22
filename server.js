@@ -52,78 +52,43 @@ function combineWavBuffers(wavBuffers) {
     console.log(`Combining ${wavBuffers.length} WAV files...`);
 
     const WAV_HEADER_SIZE = 44;
-    
-    // Filter out invalid buffers and validate format consistency
-    const validBuffers = [];
-    let referenceFormat = null;
-    
-    for (let i = 0; i < wavBuffers.length; i++) {
-        const buffer = wavBuffers[i];
-        
+    const pcmDataBuffers = wavBuffers.map((buffer, index) => {
         if (buffer.length <= WAV_HEADER_SIZE) {
-            console.warn(`Chunk ${i + 1} too small (${buffer.length} bytes), skipping`);
-            continue;
+            console.warn(`Chunk ${index + 1} too small (${buffer.length} bytes), skipping`);
+            return Buffer.alloc(0);
         }
-        
-        // Validate WAV header
-        if (buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
-            console.warn(`Chunk ${i + 1} invalid WAV format, skipping`);
-            continue;
-        }
-        
-        const format = {
-            numChannels: buffer.readUInt16LE(22),
-            sampleRate: buffer.readUInt32LE(24),
-            bitsPerSample: buffer.readUInt16LE(34)
-        };
-        
-        if (!referenceFormat) {
-            referenceFormat = format;
-        } else if (format.numChannels !== referenceFormat.numChannels || 
-                   format.sampleRate !== referenceFormat.sampleRate || 
-                   format.bitsPerSample !== referenceFormat.bitsPerSample) {
-            console.warn(`Chunk ${i + 1} format mismatch, skipping`);
-            continue;
-        }
-        
-        validBuffers.push(buffer);
-    }
-    
-    if (validBuffers.length === 0) {
-        console.error('No valid WAV buffers to combine');
-        return Buffer.alloc(0);
-    }
-    
-    if (validBuffers.length === 1) {
-        return validBuffers[0];
-    }
+        return buffer.slice(WAV_HEADER_SIZE);
+    });
 
-    const pcmDataBuffers = validBuffers.map(buffer => buffer.slice(WAV_HEADER_SIZE));
-    const combinedPCM = Buffer.concat(pcmDataBuffers);
-    
+    const combinedPCM = Buffer.concat(pcmDataBuffers.filter(b => b.length > 0));
     console.log(`Total PCM data: ${combinedPCM.length} bytes`);
-    console.log(`Format: ${referenceFormat.sampleRate}Hz, ${referenceFormat.numChannels}ch, ${referenceFormat.bitsPerSample}bit`);
+
+    const firstBuffer = wavBuffers[0];
+    const numChannels = firstBuffer.readUInt16LE(22);
+    const sampleRate = firstBuffer.readUInt32LE(24);
+    const bitsPerSample = firstBuffer.readUInt16LE(34);
+
+    console.log(`Format: ${sampleRate}Hz, ${numChannels}ch, ${bitsPerSample}bit`);
 
     const newWavBuffer = Buffer.alloc(WAV_HEADER_SIZE + combinedPCM.length);
 
-    // Write WAV header with reference format
     newWavBuffer.write('RIFF', 0);
     newWavBuffer.writeUInt32LE(36 + combinedPCM.length, 4);
     newWavBuffer.write('WAVE', 8);
     newWavBuffer.write('fmt ', 12);
     newWavBuffer.writeUInt32LE(16, 16);
     newWavBuffer.writeUInt16LE(1, 20);
-    newWavBuffer.writeUInt16LE(referenceFormat.numChannels, 22);
-    newWavBuffer.writeUInt32LE(referenceFormat.sampleRate, 24);
-    newWavBuffer.writeUInt32LE(referenceFormat.sampleRate * referenceFormat.numChannels * referenceFormat.bitsPerSample / 8, 28);
-    newWavBuffer.writeUInt16LE(referenceFormat.numChannels * referenceFormat.bitsPerSample / 8, 32);
-    newWavBuffer.writeUInt16LE(referenceFormat.bitsPerSample, 34);
+    newWavBuffer.writeUInt16LE(numChannels, 22);
+    newWavBuffer.writeUInt32LE(sampleRate, 24);
+    newWavBuffer.writeUInt32LE(sampleRate * numChannels * bitsPerSample / 8, 28);
+    newWavBuffer.writeUInt16LE(numChannels * bitsPerSample / 8, 32);
+    newWavBuffer.writeUInt16LE(bitsPerSample, 34);
     newWavBuffer.write('data', 36);
     newWavBuffer.writeUInt32LE(combinedPCM.length, 40);
 
     combinedPCM.copy(newWavBuffer, WAV_HEADER_SIZE);
 
-    console.log(`Combined WAV size: ${newWavBuffer.length} bytes from ${validBuffers.length} valid chunks`);
+    console.log(`Combined WAV size: ${newWavBuffer.length} bytes`);
     return newWavBuffer;
 }
 
@@ -170,15 +135,12 @@ async function processDiarization(audioBuffer, sessionId, language) {
         const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
             fs.readFileSync(tempFilePath),
             {
-                model: "nova-2",
+                model: "nova-3",
                 punctuate: true,
                 diarize: true,
                 smart_format: true,
                 timeout: 120000,
-                language: language,
-                utterances: true,
-                utt_split: 0.8,
-                multichannel: false
+                language: language
             }
         );
         fs.unlinkSync(tempFilePath)
@@ -192,41 +154,18 @@ async function processDiarization(audioBuffer, sessionId, language) {
         const speakers = {};
         const channels = result.results?.channels || [];
 
-        // First try to get the full transcript without diarization as fallback
-        let fullTranscript = '';
-        channels.forEach((channel) => {
-            channel.alternatives.forEach((alt) => {
-                if (alt.transcript) {
-                    fullTranscript += alt.transcript + ' ';
-                }
-            });
-        });
-
-        // Process diarized speakers
         channels.forEach((channel) => {
             channel.alternatives.forEach((alt) => {
                 if (alt.words && alt.words.length > 0) {
                     alt.words.forEach((word) => {
                         const speaker = word.speaker !== undefined ? word.speaker : 0;
                         if (!speakers[speaker]) {
-                            speakers[speaker] = { transcript: '', words: [], confidence: 0 };
+                            speakers[speaker] = { transcript: '', words: [] };
                         }
                         speakers[speaker].transcript += (word.punctuated_word || word.word) + ' ';
-                        // Track confidence for speaker quality
-                        if (word.confidence) {
-                            speakers[speaker].confidence += word.confidence;
-                        }
                     });
                 }
             });
-        });
-
-        // Calculate average confidence for each speaker
-        Object.keys(speakers).forEach(speakerId => {
-            const speaker = speakers[speakerId];
-            if (speaker.words && speaker.words.length > 0) {
-                speaker.confidence = speaker.confidence / speaker.words.length;
-            }
         });
 
         console.log(`Found ${Object.keys(speakers).length} speaker(s)`);
@@ -237,63 +176,41 @@ async function processDiarization(audioBuffer, sessionId, language) {
             console.log(`Speaker${speakerId} Transcript : ${speaker.transcript}`);
         });
 
-        // Find the best transcript to use
-        let bestTranscript = '';
-        let transcriptSource = 'none';
-
-        // Try to find the primary speaker (usually speaker 0 or the one with most content)
-        const speakerIds = Object.keys(speakers).sort((a, b) => {
-            const aLength = speakers[a].transcript.trim().length;
-            const bLength = speakers[b].transcript.trim().length;
-            return bLength - aLength; // Sort by length descending
-        });
-
-        if (speakerIds.length > 0 && speakers[speakerIds[0]].transcript.trim().length > 10) {
-            bestTranscript = speakers[speakerIds[0]].transcript.trim();
-            transcriptSource = `speaker_${speakerIds[0]}`;
-            console.log(`Using speaker ${speakerIds[0]} transcript (${bestTranscript.length} chars)`);
-        } else if (fullTranscript.trim().length > 10) {
-            bestTranscript = fullTranscript.trim();
-            transcriptSource = 'full_transcript';
-            console.log(`Using full transcript fallback (${bestTranscript.length} chars)`);
-        }
-
-        if (bestTranscript && bestTranscript.length > 10) {
-            console.log(`Processing transcript from ${transcriptSource}: "${bestTranscript.substring(0, 100)}..."`);
-            
-            let summary = bestTranscript;
+        // Process first person (magician) voice only
+        const speaker0 = speakers[0];
+        if (speaker0 && speaker0.transcript) {
+            let summary = speaker0.transcript;
             let topic = null;
 
             if (typeof language === 'string' && language.toLowerCase().startsWith('en')) {
                 // Use Deepgram directly for English
-                const dgResult = await summarizeTextWithDeepgram(bestTranscript, language);
+                const dgResult = await summarizeTextWithDeepgram(speaker0.transcript, language);
                 summary = dgResult.summary;
-                topic = dgResult.topic || extractSimpleTopic(bestTranscript);
+                topic = dgResult.topic || summary; // Use summary as fallback if topic is null
             } else {
                 // For non-English: Translate → Deepgram → Translate back
                 try {
                     // Translate transcript to English for Deepgram processing
-                    const translatedTranscript = await translateText(bestTranscript, 'en');
-                    console.log(`Translated to English: "${translatedTranscript.substring(0, 100)}..."`);
+                    const translatedTranscript = await translateText(speaker0.transcript, 'en');
 
                     // Get summary and topic from Deepgram (in English)
                     const dgResult = await summarizeTextWithDeepgram(translatedTranscript, 'en');
 
                     // Translate results back to original language
                     summary = await translateText(dgResult.summary, language);
-                    topic = await translateText(dgResult.topic || extractSimpleTopic(translatedTranscript), language);
+                    topic = await translateText(dgResult.topic || dgResult.summary, language);
 
                 } catch (translationError) {
                     console.error('Translation process failed, using fallback:', translationError);
                     // Fallback: use original transcript with simple topic extraction
-                    summary = bestTranscript;
-                    topic = extractSimpleTopic(bestTranscript);
+                    summary = speaker0.transcript;
+                    topic = speaker0.transcript.split(' ').slice(0, 4).join(' ');
                 }
             }
 
             // Final fallback: ensure topic is never null
             if (!topic || topic === "null" || topic.trim().length === 0) {
-                topic = extractSimpleTopic(summary);
+                topic = summary;
             }
 
             console.log("Final summary:", summary);
@@ -321,25 +238,16 @@ async function processDiarization(audioBuffer, sessionId, language) {
                 console.log('Summary sent to magician');
             }
         } else {
-            console.log('No usable transcript found');
-            console.log('Available speakers:', Object.keys(speakers));
-            console.log('Full transcript length:', fullTranscript.length);
-            console.log('Full transcript preview:', fullTranscript.substring(0, 200));
+            console.log('No speaker 0 transcript found');
 
-            // Send detailed error information
             if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
                     type: 'diarization_error',
-                    error: 'no_usable_transcript',
-                    message: 'No clear speech detected. Please speak louder and clearer.',
-                    details: {
-                        speakersFound: Object.keys(speakers).length,
-                        fullTranscriptLength: fullTranscript.length,
-                        audioSize: audioBuffer.length
-                    },
+                    error: 'no_speaker_detected',
+                    message: 'No speech detected. Please try again.',
                     timestamp: Date.now()
                 }));
-                console.log('Detailed error notification sent to magician');
+                console.log('Error notification sent to magician');
             }
         }
 
@@ -357,27 +265,6 @@ function normalizeText(text) {
         .trim();
 }
 
-// Extract simple topic from transcript when Deepgram topic detection fails
-function extractSimpleTopic(text) {
-    if (!text || text.trim().length === 0) return 'Magic Trick';
-    
-    // Remove common filler words and get meaningful words
-    const fillerWords = ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'would', 'could', 'should', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'this', 'that', 'these', 'those'];
-    
-    const words = text.toLowerCase()
-        .replace(/[^\w\s]/g, '') // Remove punctuation
-        .split(/\s+/)
-        .filter(word => word.length > 2 && !fillerWords.includes(word))
-        .slice(0, 4); // Take first 4 meaningful words
-    
-    if (words.length === 0) {
-        // Fallback to first few words of original text
-        return text.split(' ').slice(0, 3).join(' ') || 'Magic Trick';
-    }
-    
-    return words.join(' ');
-}
-
 
 app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) => {
     const { sessionId, startKeyword, endKeyword, isMagicActive, chunkNumber, language = 'en' } = req.body;
@@ -393,13 +280,11 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
         console.log(`Size: ${audioBuffer.length} bytes`);
 
         const { result, error } = await deepgram.listen.prerecorded.transcribeFile(audioBuffer, {
-            model: 'nova-2',
-            punctuate: true,
+            model: 'nova-3',
+            // punctuate: true,
             smart_format: true,
-            endpointing: 300,
-            language: language,
-            utterances: true,
-            utt_split: 0.8
+            endpointing: 500,
+            language: language
         });
 
         fs.unlinkSync(filePath);
@@ -410,15 +295,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
         }
 
         const transcript = result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
-        const confidence = result?.results?.channels?.[0]?.alternatives?.[0]?.confidence || 0;
-        
         console.log(`Transcript: "${transcript}"`);
-        console.log(`Confidence: ${confidence}`);
-        
-        // Log additional debug info for low confidence
-        if (confidence < 0.5 && transcript.length > 0) {
-            console.log(`⚠️ Low confidence transcription detected`);
-        }
 
         if (!audioChunks[sessionId]) {
             audioChunks[sessionId] = { chunks: [], isRecording: false };
