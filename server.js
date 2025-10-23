@@ -45,30 +45,34 @@ const upload = multer({
 app.use(express.json());
 app.use(cors());
 
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
+
 function combineWavBuffers(wavBuffers) {
     if (wavBuffers.length === 0) return Buffer.alloc(0);
     if (wavBuffers.length === 1) return wavBuffers[0];
 
-    console.log(`Combining ${wavBuffers.length} WAV files...`);
+    console.log(`🔗 Combining ${wavBuffers.length} WAV files...`);
 
     const WAV_HEADER_SIZE = 44;
     const pcmDataBuffers = wavBuffers.map((buffer, index) => {
         if (buffer.length <= WAV_HEADER_SIZE) {
-            console.warn(`Chunk ${index + 1} too small (${buffer.length} bytes), skipping`);
+            console.warn(`⚠️ Chunk ${index + 1} too small (${buffer.length} bytes), skipping`);
             return Buffer.alloc(0);
         }
         return buffer.slice(WAV_HEADER_SIZE);
     });
 
     const combinedPCM = Buffer.concat(pcmDataBuffers.filter(b => b.length > 0));
-    console.log(`Total PCM data: ${combinedPCM.length} bytes`);
+    console.log(`📊 Total PCM data: ${combinedPCM.length} bytes`);
 
     const firstBuffer = wavBuffers[0];
     const numChannels = firstBuffer.readUInt16LE(22);
     const sampleRate = firstBuffer.readUInt32LE(24);
     const bitsPerSample = firstBuffer.readUInt16LE(34);
 
-    console.log(`Format: ${sampleRate}Hz, ${numChannels}ch, ${bitsPerSample}bit`);
+    console.log(`🎵 Format: ${sampleRate}Hz, ${numChannels}ch, ${bitsPerSample}bit`);
 
     const newWavBuffer = Buffer.alloc(WAV_HEADER_SIZE + combinedPCM.length);
 
@@ -88,12 +92,12 @@ function combineWavBuffers(wavBuffers) {
 
     combinedPCM.copy(newWavBuffer, WAV_HEADER_SIZE);
 
-    console.log(`Combined WAV size: ${newWavBuffer.length} bytes`);
+    console.log(`✅ Combined WAV size: ${newWavBuffer.length} bytes`);
     return newWavBuffer;
 }
 
 async function summarizeTextWithDeepgram(text, language = 'en') {
-    console.log('Summarizing...');
+    console.log('📝 Summarizing with Deepgram...');
     try {
         const response = await deepgram.read.analyzeText(
             { text },
@@ -107,7 +111,7 @@ async function summarizeTextWithDeepgram(text, language = 'en') {
         console.log(`Topic via Deepgram: "${topic}"`);
         return { summary, topic };
     } catch (err) {
-        console.error('Summarization error:', err);
+        console.error('❌ Summarization error:', err);
         return { summary: "Error summarizing.", topic: null };
     }
 }
@@ -116,11 +120,11 @@ async function translateText(text, targetLanguage) {
     try {
         if (!text || text.trim().length === 0) return text;
 
-        console.log(`Translating to ${targetLanguage}: "${text.substring(0, 100)}..."`);
+        console.log(`🌐 Translating to ${targetLanguage}: "${text.substring(0, 100)}..."`);
         const result = await translate(text, { to: targetLanguage });
         return result.text;
     } catch (error) {
-        console.error('Translation error:', error);
+        console.error('❌ Translation error:', error);
         return text; // Return original text if translation fails
     }
 }
@@ -134,10 +138,10 @@ function normalizeText(text) {
         .trim();
 }
 
-//  Function to extract text between keywords
+// Function to extract text between keywords
 function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
     if (!startKeyword || !endKeyword) {
-        console.log('No keywords provided, using full text');
+        console.log('⚠️ No keywords provided, using full text');
         return fullText;
     }
 
@@ -145,19 +149,19 @@ function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
     const normalizedStart = normalizeText(startKeyword);
     const normalizedEnd = normalizeText(endKeyword);
 
-    console.log(`Searching for text between "${startKeyword}" and "${endKeyword}"`);
-    console.log(`Full text: "${normalizedText}"`);
+    console.log(`🔍 Searching for text between "${startKeyword}" and "${endKeyword}"`);
+    console.log(`📄 Full text: "${normalizedText.substring(0, 200)}..."`);
 
     const startIndex = normalizedText.indexOf(normalizedStart);
     const endIndex = normalizedText.lastIndexOf(normalizedEnd);
 
     if (startIndex === -1) {
-        console.log('Start keyword not found in text');
+        console.log('⚠️ Start keyword not found in text');
         return fullText; // Fallback to full text if start not found
     }
 
     if (endIndex === -1 || endIndex <= startIndex) {
-        console.log('End keyword not found or before start keyword');
+        console.log('⚠️ End keyword not found or before start keyword');
         return fullText; // Fallback to full text if end not found
     }
 
@@ -166,16 +170,15 @@ function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
     const extractedNormalized = normalizedText.substring(startPosition, endIndex).trim();
 
     // Map back to original text (approximate)
-    // For better mapping, we'll use the original text with similar approach
     const originalStart = fullText.toLowerCase().indexOf(startKeyword.toLowerCase());
     const originalEnd = fullText.toLowerCase().lastIndexOf(endKeyword.toLowerCase());
-    
+
     if (originalStart !== -1 && originalEnd !== -1 && originalEnd > originalStart) {
         const extracted = fullText.substring(
             originalStart + startKeyword.length,
             originalEnd
         ).trim();
-        console.log(`Extracted text: "${extracted}"`);
+        console.log(`Extracted text (${extracted.length} chars): "${extracted}"`);
         return extracted;
     }
 
@@ -183,15 +186,19 @@ function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
     return extractedNormalized || fullText;
 }
 
+// DIARIZATION & PROCESSING
+
 async function processDiarization(audioBuffer, sessionId, language, startKeyword, endKeyword) {
-    console.log(`\n Diarization for session ${sessionId} (${audioBuffer.length} bytes)`);
+    console.log(`\n ========== DIARIZATION START ==========`);
+    console.log(`Session: ${sessionId} | Audio: ${audioBuffer.length} bytes`);
+    console.log(`Language: ${language}`);
     console.log(`Keywords - Start: "${startKeyword}", End: "${endKeyword}"`);
 
     try {
         const tempFilePath = path.join(tempDir, `magic_${sessionId}_${Date.now()}.wav`);
         fs.writeFileSync(tempFilePath, audioBuffer);
 
-        console.log(`⏳ Sending to Deepgram for transcription...`);
+        console.log(`Sending to Deepgram for transcription...`);
         const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
             fs.readFileSync(tempFilePath),
             {
@@ -208,7 +215,7 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
         console.log(`Deepgram response received`);
 
         if (error) {
-            console.error("❌ Diarization error:", error);
+            console.error("Diarization error:", error);
             if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
                     type: 'diarization_error',
@@ -222,23 +229,24 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
 
         const speakers = {};
         const channels = result.results?.channels || [];
-        
+
         console.log(`Channels received: ${channels.length}`);
 
         // Also check for non-diarized transcript as fallback
         let fullTranscript = '';
-        
+
         channels.forEach((channel, channelIndex) => {
-            console.log(`📻 Channel ${channelIndex}: ${channel.alternatives?.length || 0} alternatives`);
-            
+            console.log(`Channel ${channelIndex}: ${channel.alternatives?.length || 0} alternatives`);
+
             channel.alternatives.forEach((alt, altIndex) => {
-                console.log(`  Alternative ${altIndex}: "${alt.transcript?.substring(0, 100) || 'empty'}"`);
-                
+                const transcriptPreview = alt.transcript?.substring(0, 100) || 'empty';
+                console.log(`Alternative ${altIndex}: "${transcriptPreview}${alt.transcript?.length > 100 ? '...' : ''}"`);
+
                 // Store full transcript as backup
                 if (alt.transcript) {
                     fullTranscript += alt.transcript + ' ';
                 }
-                
+
                 if (alt.words && alt.words.length > 0) {
                     console.log(`  Words count: ${alt.words.length}`);
                     alt.words.forEach((word) => {
@@ -252,27 +260,28 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
             });
         });
 
-        console.log(`Found ${Object.keys(speakers).length} speaker(s)`);
-        console.log(`Full transcript (non-diarized): "${fullTranscript.trim()}"`);
+        console.log(`Found ${Object.keys(speakers).length} speaker(s) via diarization`);
+        console.log(`Full transcript (non-diarized): "${fullTranscript.trim().substring(0, 200)}..."`);
 
         Object.keys(speakers).forEach(speakerId => {
             const speaker = speakers[speakerId];
+            const preview = speaker.transcript.substring(0, 200);
             console.log(`Speaker ${speakerId}: ${speaker.transcript.length} chars`);
-            console.log(`Text: "${speaker.transcript.substring(0, 200)}..."`);
+            console.log(`Text: "${preview}${speaker.transcript.length > 200 ? '...' : ''}"`);
         });
 
         // Use speaker 0 if available, otherwise fall back to full transcript
         let transcriptToProcess = '';
-        
+
         if (speakers[0] && speakers[0].transcript && speakers[0].transcript.trim().length > 0) {
             transcriptToProcess = speakers[0].transcript.trim();
-            console.log(`✅ Using Speaker 0 transcript`);
+            console.log(`Using Speaker 0 transcript (${transcriptToProcess.length} chars)`);
         } else if (fullTranscript.trim().length > 0) {
             transcriptToProcess = fullTranscript.trim();
-            console.log(`No speaker 0 found, using full transcript as fallback`);
+            console.log(`No speaker 0 found, using full transcript as fallback (${transcriptToProcess.length} chars)`);
         } else {
             console.log('No transcript found at all');
-            
+
             if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
                     type: 'diarization_error',
@@ -284,40 +293,48 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
             }
             return;
         }
-        
+
         if (transcriptToProcess) {
-            
+            console.log(`\n ========== TEXT FILTERING ==========`);
+
             // Extract text between keywords
             const filteredText = extractTextBetweenKeywords(transcriptToProcess, startKeyword, endKeyword);
-            
-            console.log(`Original transcript length: ${transcriptToProcess.length} chars`);
-            console.log(`Filtered transcript length: ${filteredText.length} chars`);
-            console.log(`Filtered text: "${filteredText}"`);
+
+            console.log(`Original transcript: ${transcriptToProcess.length} chars`);
+            console.log(`Filtered transcript: ${filteredText.length} chars`);
+            console.log(`Filtered text: "${filteredText.substring(0, 200)}..."`);
 
             let summary = filteredText;
             let topic = null;
 
+            console.log(`\n ========== SUMMARIZATION ==========`);
+
             if (typeof language === 'string' && language.toLowerCase().startsWith('en')) {
                 // Use Deepgram directly for English
+                console.log('🇬🇧 Processing in English directly');
                 const dgResult = await summarizeTextWithDeepgram(filteredText, language);
                 summary = dgResult.summary;
-                topic = dgResult.topic || summary; // Use summary as fallback if topic is null
+                topic = dgResult.topic || summary;
             } else {
                 // For non-English: Translate → Deepgram → Translate back
+                console.log(`Processing non-English (${language})`);
                 try {
-                    // Translate transcript to English for Deepgram processing
+                    console.log('Translating to English...');
                     const translatedTranscript = await translateText(filteredText, 'en');
+                    console.log(`Translated: "${translatedTranscript.substring(0, 100)}..."`);
 
-                    // Get summary and topic from Deepgram (in English)
+                    console.log('Getting summary/topic in English...');
                     const dgResult = await summarizeTextWithDeepgram(translatedTranscript, 'en');
 
-                    // Translate results back to original language
+                    console.log('Translating back to original language...');
                     summary = await translateText(dgResult.summary, language);
                     topic = await translateText(dgResult.topic || dgResult.summary, language);
 
+                    console.log(`Final summary: "${summary}"`);
+                    console.log(`Final topic: "${topic}"`);
+
                 } catch (translationError) {
                     console.error('Translation process failed, using fallback:', translationError);
-                    // Fallback: use filtered transcript with simple topic extraction
                     summary = filteredText;
                     topic = filteredText.split(' ').slice(0, 4).join(' ');
                 }
@@ -325,11 +342,13 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
 
             // Final fallback: ensure topic is never null
             if (!topic || topic === "null" || topic.trim().length === 0) {
+                console.log('Topic empty, using summary as topic');
                 topic = summary;
             }
 
-            console.log("Final summary:", summary);
-            console.log("Final topic:", topic);
+            console.log(`\n ========== FINAL RESULTS ==========`);
+            console.log(`Summary: "${summary}"`);
+            console.log(`Topic: "${topic}"`);
 
             // Send to spectator
             if (sessions[sessionId]?.spectator && sessions[sessionId].spectator.readyState === 1) {
@@ -339,7 +358,7 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
                     topic,
                     timestamp: Date.now()
                 }));
-                console.log('✅ Summary sent to spectator');
+                console.log('Summary sent to spectator');
             }
 
             // Send to magician
@@ -350,12 +369,14 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
                     topic,
                     timestamp: Date.now()
                 }));
-                console.log('✅ Summary sent to magician');
+                console.log('Summary sent to magician');
             }
+
+            console.log(` ========== DIARIZATION END ==========\n`);
         }
 
     } catch (error) {
-        console.error("❌ Diarization error:", error);
+        console.error("Diarization error:", error);
         if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
             sessions[sessionId].magician.send(JSON.stringify({
                 type: 'diarization_error',
@@ -367,11 +388,15 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
     }
 }
 
+
 app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) => {
     const { sessionId, startKeyword, endKeyword, isMagicActive, chunkNumber, language = 'en' } = req.body;
 
-    console.log(`\n📝 Chunk ${chunkNumber} | Session: ${sessionId} | Magic: ${isMagicActive} | Language: ${language}`);
-    console.log(`Keywords - Start: "${startKeyword}", End: "${endKeyword}"`);
+    console.log(`\n ========== CHUNK ${chunkNumber} ==========`);
+    // console.log(`Session: ${sessionId}`);
+    console.log(`Magic Active: ${isMagicActive}`);
+    // console.log(`Language: ${language}`);
+    // console.log(`Keywords - Start: "${startKeyword}", End: "${endKeyword}"`);
 
     if (!req.file) return res.status(400).json({ error: 'No audio file provided' });
 
@@ -379,7 +404,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
     try {
         const audioBuffer = fs.readFileSync(filePath);
-        console.log(`Size: ${audioBuffer.length} bytes`);
+        // console.log(`Size: ${audioBuffer.length} bytes`);
 
         const { result, error } = await deepgram.listen.prerecorded.transcribeFile(audioBuffer, {
             model: 'nova-3',
@@ -399,8 +424,8 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
         console.log(`Transcript: "${transcript}"`);
 
         if (!audioChunks[sessionId]) {
-            audioChunks[sessionId] = { 
-                chunks: [], 
+            audioChunks[sessionId] = {
+                chunks: [],
                 isRecording: false,
                 startKeyword: startKeyword,
                 endKeyword: endKeyword,
@@ -408,12 +433,12 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             };
         }
 
-        // Update keywords and language for the session
-        if (startKeyword) audioChunks[sessionId].startKeyword = startKeyword;
-        if (endKeyword) audioChunks[sessionId].endKeyword = endKeyword;
-        if (language) audioChunks[sessionId].language = language;
-        
-        console.log(`📋 Current keywords - Start: "${audioChunks[sessionId].startKeyword}", End: "${audioChunks[sessionId].endKeyword}"`);
+        // Update keywords and language for the session - ALWAYS update with latest values
+        audioChunks[sessionId].startKeyword = startKeyword || audioChunks[sessionId].startKeyword;
+        audioChunks[sessionId].endKeyword = endKeyword || audioChunks[sessionId].endKeyword;
+        audioChunks[sessionId].language = language || audioChunks[sessionId].language;
+
+        console.log(`Session keywords - Start: "${audioChunks[sessionId].startKeyword}", End: "${audioChunks[sessionId].endKeyword}"`);
 
         // Send live transcript to magician
         if (sessions[sessionId]?.magician?.readyState === 1) {
@@ -434,10 +459,15 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
         // Start recording
         if (hasStartKeyword && isMagicActive === 'false') {
-            console.log('🟢 START DETECTED - Begin storing chunks');
-            console.log(`   Start keyword: "${startKeyword}" found in: "${transcript}"`);
+            console.log('START KEYWORD DETECTED - Begin storing chunks');
+            console.log(`Start keyword: "${startKeyword}" found in: "${transcript}"`);
             audioChunks[sessionId].chunks = [];
             audioChunks[sessionId].isRecording = true;
+
+            // IMPORTANT: Store the chunk that contains the start keyword
+            audioChunks[sessionId].chunks.push(audioBuffer);
+            console.log(` Stored chunk ${audioChunks[sessionId].chunks.length} (${audioBuffer.length} bytes) - Contains start keyword`);
+            console.log(` Transcript: "${transcript}"`);
 
             if (sessions[sessionId]?.magician?.readyState === 1) {
                 sessions[sessionId].magician.send(JSON.stringify({
@@ -451,18 +481,24 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             return res.json({ success: true, transcript, keywordDetected: true, keyword: 'start' });
         }
 
-        // Store chunk if recording
+        // Store chunk if recording (but not if it contains end keyword)
         if (audioChunks[sessionId].isRecording && !hasEndKeyword) {
             audioChunks[sessionId].chunks.push(audioBuffer);
-            console.log(`💾 Stored chunk ${audioChunks[sessionId].chunks.length} (${audioBuffer.length} bytes)`);
-            console.log(`   Transcript: "${transcript}"`);
+            console.log(`Stored chunk ${audioChunks[sessionId].chunks.length} (${audioBuffer.length} bytes)`);
+            console.log(` Transcript: "${transcript}"`);
         }
 
         // End keyword detected
         if (hasEndKeyword && isMagicActive === 'true') {
-            console.log('🔴 END DETECTED - Processing stored audio');
+            console.log('END KEYWORD DETECTED - Processing stored audio');
+            console.log(`End keyword: "${endKeyword}" found in: "${transcript}"`);
 
             audioChunks[sessionId].isRecording = false;
+
+            // IMPORTANT: Store the chunk that contains the end keyword
+            audioChunks[sessionId].chunks.push(audioBuffer);
+            console.log(`Stored chunk ${audioChunks[sessionId].chunks.length} (${audioBuffer.length} bytes) - Contains end keyword`);
+            console.log(`Transcript: "${transcript}"`);
 
             // Notify magician to stop mic
             if (sessions[sessionId]?.magician?.readyState === 1) {
@@ -480,8 +516,8 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
                 console.log(`Combined audio size: ${combinedAudio.length} bytes`);
 
                 processDiarization(
-                    combinedAudio, 
-                    sessionId, 
+                    combinedAudio,
+                    sessionId,
                     audioChunks[sessionId].language || language,
                     audioChunks[sessionId].startKeyword,
                     audioChunks[sessionId].endKeyword
@@ -491,7 +527,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
 
                 audioChunks[sessionId].chunks = [];
             } else {
-                console.log('⚠️ No chunks stored to process');
+                console.log('No chunks stored to process');
                 if (sessions[sessionId]?.magician?.readyState === 1) {
                     sessions[sessionId].magician.send(JSON.stringify({
                         type: 'no_recording_error',
@@ -499,7 +535,7 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
                         message: 'No audio captured during magic. Recording was too short or silent.',
                         timestamp: Date.now()
                     }));
-                    console.log('⚠️ No chunks error sent to magician');
+                    console.log('No chunks error sent to magician');
                 }
             }
 
@@ -526,9 +562,9 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
     }
 });
 
-// WebSocket 
+
 wss.on('connection', (ws) => {
-    console.log('🔌 New WebSocket connection');
+    console.log('New WebSocket connection');
     let sessionId, clientRole;
 
     ws.on('message', async (message) => {
@@ -545,12 +581,12 @@ wss.on('connection', (ws) => {
                 }
 
                 sessions[sessionId][clientRole] = ws;
-                console.log(`✅ ${clientRole} joined: ${sessionId}`);
+                console.log(`✅ ${clientRole} joined session: ${sessionId}`);
 
                 ws.send(JSON.stringify({ type: 'joined', sessionId, role: clientRole }));
 
                 if (sessions[sessionId].magician && sessions[sessionId].spectator) {
-                    console.log(`🎉 Both users ready: ${sessionId}`);
+                    console.log(`🎉 Both users ready in session: ${sessionId}`);
                     if (sessions[sessionId].magician.readyState === 1) {
                         sessions[sessionId].magician.send(JSON.stringify({ type: 'ready' }));
                     }
@@ -559,11 +595,13 @@ wss.on('connection', (ws) => {
                     }
                 }
             }
-            
+
             if (data.type === 'manual_start') {
                 const { sessionId, startKeyword, endKeyword, language = 'en' } = data;
-                console.log(`🟢 Manual start received for session: ${sessionId}`);
+                console.log(`\n ========== MANUAL START ==========`);
+                console.log(`Session: ${sessionId}`);
                 console.log(`Keywords - Start: "${startKeyword}", End: "${endKeyword}"`);
+                console.log(`Language: ${language}`);
 
                 // Initialize audio chunks storage
                 if (!audioChunks[sessionId]) {
@@ -583,7 +621,7 @@ wss.on('connection', (ws) => {
                 // Start recording
                 audioChunks[sessionId].chunks = [];
                 audioChunks[sessionId].isRecording = true;
-                console.log('Manual start - Begin storing chunks');
+                console.log('Manual start - Recording activated');
 
                 // Notify magician that magic has started
                 if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
@@ -595,20 +633,22 @@ wss.on('connection', (ws) => {
                     }));
                 }
             }
-            
+
             if (data.type === 'manual_end') {
                 const { sessionId, language = 'en' } = data;
-                console.log(`🔴 Manual stop received for session: ${sessionId}`);
+                console.log(`\n========== MANUAL STOP ==========`);
+                console.log(`Session: ${sessionId}`);
 
                 if (audioChunks[sessionId] && audioChunks[sessionId].chunks.length > 0) {
                     audioChunks[sessionId].isRecording = false;
 
                     const combinedAudio = combineWavBuffers(audioChunks[sessionId].chunks);
-                    console.log(`🎬 Processing ${audioChunks[sessionId].chunks.length} chunks (${combinedAudio.length} bytes)`);
+                    console.log(`Processing ${audioChunks[sessionId].chunks.length} chunks (${combinedAudio.length} bytes)`);
+                    console.log(`Using keywords - Start: "${audioChunks[sessionId].startKeyword}", End: "${audioChunks[sessionId].endKeyword}"`);
 
                     processDiarization(
-                        combinedAudio, 
-                        sessionId, 
+                        combinedAudio,
+                        sessionId,
                         audioChunks[sessionId].language || language,
                         audioChunks[sessionId].startKeyword,
                         audioChunks[sessionId].endKeyword
@@ -622,13 +662,15 @@ wss.on('connection', (ws) => {
                     const wasRecording = audioChunks[sessionId]?.isRecording;
                     const errorReason = wasRecording ? 'no_chunks_captured' : 'magic_not_started';
 
-                    console.log(`⚠️ Manual stop but ${wasRecording ? 'no chunks captured' : 'magic never started'}`);
+                    console.log(`Manual stop but ${wasRecording ? 'no chunks captured' : 'magic never started'}`);
 
                     if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
                         sessions[sessionId].magician.send(JSON.stringify({
                             type: 'no_recording_error',
                             error: errorReason,
-                            message: 'No audio captured during magic. Recording was too short or silent.',
+                            message: wasRecording
+                                ? 'No audio captured during magic. Recording was too short or silent.'
+                                : 'Magic was never started. Please start magic before stopping.',
                             timestamp: Date.now()
                         }));
                     }
@@ -641,18 +683,25 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        console.log(`🔌 Closed: ${clientRole} in ${sessionId}`);
+        console.log(`🔌 Connection closed: ${clientRole} in session ${sessionId}`);
         if (sessionId && clientRole && sessions[sessionId]) {
             delete sessions[sessionId][clientRole];
             if (Object.keys(sessions[sessionId]).length === 0) {
                 delete sessions[sessionId];
                 delete speechHistory[sessionId];
                 delete audioChunks[sessionId];
+                console.log(`Cleaned up session: ${sessionId}`);
             }
         }
     });
+
+    ws.on('error', (error) => {
+        console.error('WebSocket error:', error);
+    });
 });
 
+
 server.listen(PORT, () => {
-    console.log(`\n🚀 Server running on port ${PORT}\n`);
-});
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`🚀 Magic Server Running`);
+})
