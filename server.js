@@ -333,10 +333,10 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
 
             if (typeof language === 'string' && language.toLowerCase().startsWith('en')) {
                 // Use Deepgram directly for English
-                console.log('🇬🇧 Processing in English directly');
+                console.log('Processing in English directly');
                 const dgResult = await summarizeTextWithDeepgram(filteredText, language);
                 summary = dgResult.summary;
-                topic = dgResult.topic || summary;
+                topic = dgResult.topic || (summary.split(/\s+/).length > 6 ? summary.split(/\s+/).slice(0, 6).join(' ') + '...' : summary);
             } else {
                 // For non-English: Translate → Deepgram → Translate back
                 console.log(`Processing non-English (${language})`);
