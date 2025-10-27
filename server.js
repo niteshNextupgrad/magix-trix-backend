@@ -45,10 +45,6 @@ const upload = multer({
 app.use(express.json());
 app.use(cors());
 
-// ============================================
-// UTILITY FUNCTIONS
-// ============================================
-
 function combineWavBuffers(wavBuffers) {
     if (wavBuffers.length === 0) return Buffer.alloc(0);
     if (wavBuffers.length === 1) return wavBuffers[0];
@@ -97,7 +93,7 @@ function combineWavBuffers(wavBuffers) {
 }
 
 async function summarizeTextWithDeepgram(text, language = 'en') {
-    console.log('📝 Summarizing with Deepgram...');
+    console.log('Summarizing with Deepgram...');
     try {
         const response = await deepgram.read.analyzeText(
             { text },
@@ -138,53 +134,65 @@ function normalizeText(text) {
         .trim();
 }
 
-// Function to extract text between keywords
 function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
-    if (!startKeyword || !endKeyword) {
-        console.log('⚠️ No keywords provided, using full text');
-        return fullText;
-    }
+    if (!fullText || fullText.trim().length === 0) return "";
 
     const normalizedText = normalizeText(fullText);
-    const normalizedStart = normalizeText(startKeyword);
-    const normalizedEnd = normalizeText(endKeyword);
+    const normalizedStart = normalizeText(startKeyword || "");
+    const normalizedEnd = normalizeText(endKeyword || "");
 
-    console.log(`🔍 Searching for text between "${startKeyword}" and "${endKeyword}"`);
-    console.log(`📄 Full text: "${normalizedText.substring(0, 200)}..."`);
+    console.log(`Searching between "${startKeyword}" and "${endKeyword}"`);
+    console.log(`Full text: "${normalizedText.substring(0, 200)}..."`);
 
-    const startIndex = normalizedText.indexOf(normalizedStart);
-    const endIndex = normalizedText.lastIndexOf(normalizedEnd);
+    const startIndex = normalizedStart
+        ? normalizedText.indexOf(normalizedStart)
+        : -1;
+    const endIndex = normalizedEnd
+        ? normalizedText.lastIndexOf(normalizedEnd)
+        : -1;
 
-    if (startIndex === -1) {
-        console.log('⚠️ Start keyword not found in text');
-        return fullText; // Fallback to full text if start not found
+    let extracted = "";
+
+    // Both keywords exist but nothing between → return empty
+    if (
+        startIndex !== -1 &&
+        endIndex !== -1 &&
+        endIndex > startIndex &&
+        endIndex <= startIndex + normalizedStart.length + 1
+    ) {
+        console.log("⚠️ Only keywords found, no text between");
+        return "";
     }
 
-    if (endIndex === -1 || endIndex <= startIndex) {
-        console.log('⚠️ End keyword not found or before start keyword');
-        return fullText; // Fallback to full text if end not found
-    }
-
-    // Extract text between keywords (excluding the keywords themselves)
-    const startPosition = startIndex + normalizedStart.length;
-    const extractedNormalized = normalizedText.substring(startPosition, endIndex).trim();
-
-    // Map back to original text (approximate)
-    const originalStart = fullText.toLowerCase().indexOf(startKeyword.toLowerCase());
-    const originalEnd = fullText.toLowerCase().lastIndexOf(endKeyword.toLowerCase());
-
-    if (originalStart !== -1 && originalEnd !== -1 && originalEnd > originalStart) {
-        const extracted = fullText.substring(
-            originalStart + startKeyword.length,
-            originalEnd
-        ).trim();
-        console.log(`Extracted text (${extracted.length} chars): "${extracted}"`);
+    // Start keyword found, but no (or invalid) end keyword
+    if (startIndex !== -1 && (endIndex === -1 || endIndex <= startIndex)) {
+        extracted = fullText.substring(startIndex + startKeyword.length).trim();
+        console.log(`✅ Extracted after start keyword: "${extracted}"`);
         return extracted;
     }
 
-    console.log(`Using normalized extraction: "${extractedNormalized}"`);
-    return extractedNormalized || fullText;
+    // End keyword found but no start keyword
+    if (endIndex !== -1 && startIndex === -1) {
+        extracted = fullText.substring(0, endIndex).trim();
+        console.log(`Extracted before end keyword: "${extracted}"`);
+        return extracted;
+    }
+
+    // Both keywords found and valid → normal extraction
+    if (startIndex !== -1 && endIndex > startIndex) {
+        extracted = fullText.substring(
+            startIndex + startKeyword.length,
+            endIndex
+        ).trim();
+        console.log(`✅ Extracted between start & end: "${extracted}"`);
+        return extracted;
+    }
+
+    // Default fallback
+    console.log("⚠️ No keywords detected, returning full text");
+    return fullText.trim();
 }
+
 
 // DIARIZATION & PROCESSING
 
@@ -300,6 +308,20 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
             // Extract text between keywords
             const filteredText = extractTextBetweenKeywords(transcriptToProcess, startKeyword, endKeyword);
 
+            const cleanFilteredText = filteredText.replace(/[^\w\s]/g, '').trim(); // remove punctuation
+
+            if (!cleanFilteredText || cleanFilteredText.length < 2) {
+                console.log(`Filtered text too short or invalid: "${filteredText}"`);
+                if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+                    sessions[sessionId].magician.send(JSON.stringify({
+                        type: 'no_recording_error',
+                        error: 'text_too_short',
+                        message: 'No meaningful speech detected. Please speak at least 2 characters of text.',
+                        timestamp: Date.now()
+                    }));
+                }
+                return; // stop further processing
+            }
             console.log(`Original transcript: ${transcriptToProcess.length} chars`);
             console.log(`Filtered transcript: ${filteredText.length} chars`);
             console.log(`Filtered text: "${filteredText.substring(0, 200)}..."`);
@@ -410,7 +432,8 @@ app.post('/api/process-audio-chunk', upload.single('audio'), async (req, res) =>
             model: 'nova-3',
             smart_format: true,
             endpointing: 500,
-            language: language
+            language: language,
+            timeout: 15000
         });
 
         fs.unlinkSync(filePath);
