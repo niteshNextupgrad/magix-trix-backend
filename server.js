@@ -88,7 +88,7 @@ function combineWavBuffers(wavBuffers) {
 
     combinedPCM.copy(newWavBuffer, WAV_HEADER_SIZE);
 
-    console.log(`✅ Combined WAV size: ${newWavBuffer.length} bytes`);
+    console.log(`Combined WAV size: ${newWavBuffer.length} bytes`);
     return newWavBuffer;
 }
 
@@ -107,7 +107,7 @@ async function summarizeTextWithDeepgram(text, language = 'en') {
         console.log(`Topic via Deepgram: "${topic}"`);
         return { summary, topic };
     } catch (err) {
-        console.error('❌ Summarization error:', err);
+        console.error('Summarization error:', err);
         return { summary: "Error summarizing.", topic: null };
     }
 }
@@ -116,11 +116,11 @@ async function translateText(text, targetLanguage) {
     try {
         if (!text || text.trim().length === 0) return text;
 
-        console.log(`🌐 Translating to ${targetLanguage}: "${text.substring(0, 100)}..."`);
+        console.log(`Translating to ${targetLanguage}: "${text.substring(0, 100)}..."`);
         const result = await translate(text, { to: targetLanguage });
         return result.text;
     } catch (error) {
-        console.error('❌ Translation error:', error);
+        console.error('Translation error:', error);
         return text; // Return original text if translation fails
     }
 }
@@ -160,14 +160,14 @@ function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
         endIndex > startIndex &&
         endIndex <= startIndex + normalizedStart.length + 1
     ) {
-        console.log("⚠️ Only keywords found, no text between");
+        console.log("Only keywords found, no text between");
         return "";
     }
 
     // Start keyword found, but no (or invalid) end keyword
     if (startIndex !== -1 && (endIndex === -1 || endIndex <= startIndex)) {
         extracted = fullText.substring(startIndex + startKeyword.length).trim();
-        console.log(`✅ Extracted after start keyword: "${extracted}"`);
+        console.log(`Extracted after start keyword: "${extracted}"`);
         return extracted;
     }
 
@@ -184,12 +184,12 @@ function extractTextBetweenKeywords(fullText, startKeyword, endKeyword) {
             startIndex + startKeyword.length,
             endIndex
         ).trim();
-        console.log(`✅ Extracted between start & end: "${extracted}"`);
+        console.log(`Extracted between start & end: "${extracted}"`);
         return extracted;
     }
 
     // Default fallback
-    console.log("⚠️ No keywords detected, returning full text");
+    console.log("No keywords detected, returning full text");
     return fullText.trim();
 }
 
@@ -304,6 +304,15 @@ async function processDiarization(audioBuffer, sessionId, language, startKeyword
 
         if (transcriptToProcess) {
             console.log(`\n ========== TEXT FILTERING ==========`);
+            // Send transcriptToProcess directly to magician
+            if (sessions[sessionId]?.magician && sessions[sessionId].magician.readyState === 1) {
+                sessions[sessionId].magician.send(JSON.stringify({
+                    type: "magic_transcript",
+                    text: transcriptToProcess.trim(),
+                    timestamp: Date.now()
+                }));
+                // console.log("Sent magic_transcript to magician");
+            }
 
             // Extract text between keywords
             const filteredText = extractTextBetweenKeywords(transcriptToProcess, startKeyword, endKeyword);
